@@ -156,7 +156,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
   // review-before-send modal: target='' while a BNS name is still resolving.
   // kind distinguishes what the confirm button actually does — a token send
   // reads its amount in the token's units, a registration has no destination.
-  const [review, setReview] = useState<{ target: string; name?: string; kind: 'bdx' | 'token' | 'register' } | null>(null)
+  const [review, setReview] = useState<{ target: string; name?: string; kind: 'bdx' | 'token' | 'register' | 'masternode' } | null>(null)
   const [reviewLoading, setReviewLoading] = useState(false)
   const [reviewErr, setReviewErr] = useState('')
   const [sending, setSending] = useState(false)
@@ -190,6 +190,11 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
   // a new token, minting the initial supply to this wallet and locking
   // collateral rather than paying it away.
   const [tokenToggle, setTokenToggle] = useState(false)
+  // Master node registration mode. Like tokenToggle it takes over the send
+  // screen, and like it, it is reached only from Settings — the main page has
+  // no room for a third thing that looks like a send but is not one.
+  const [mnToggle, setMnToggle] = useState(false)
+  const [mnString, setMnString] = useState('')
   const [tokenTicker, setTokenTicker] = useState('')
   const [tokenFullName, setTokenFullName] = useState('')
   const [tokenDecimals, setTokenDecimals] = useState('8')
@@ -202,7 +207,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
 
   const heldTokens = tokenRows.filter(r => r.status === 'confirmed' && r.verified > 0n)
   const selectedToken = sendAsset ? tokenRows.find(r => r.tokenId === sendAsset) : undefined
-  const isTokenSend = !tokenToggle && !!selectedToken
+  const isTokenSend = !tokenToggle && !mnToggle && !!selectedToken
   const tokenInfoById = new Map(tokenRows.map(r => [r.tokenId, r]))
 
   // A refresh can drop a token row out from under an open detail screen (e.g.
@@ -512,11 +517,33 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
       if (maxSupplyAtomic > UINT64_MAX) {
         setFormError(`Max supply is too large at ${dp} decimals — reduce the supply or the decimal count`); return
       }
-      // The fee is BDX regardless, and collateral is locked in BDX too.
-      if (unlocked !== null && unlocked <= 0n) {
-        setFormError('Registering a token still needs BDX for the network fee and collateral'); return
+      // The fee is BDX regardless, and collateral is locked in BDX too. The
+      // node refuses a registration that cannot cover the collateral plus the
+      // registration fee, so say so here rather than after building it.
+      const regCost = limits
+        ? BigInt(limits.collateral_amount) + BigInt(limits.registration_fee_amount ?? '0')
+        : 0n
+      if (unlocked !== null && (unlocked <= 0n || unlocked < regCost)) {
+        setFormError(regCost > 0n
+          ? `Registering a token needs ${fmtBDX(regCost)} BDX unlocked (collateral plus registration fee), plus the network fee`
+          : 'Registering a token still needs BDX for the network fee and collateral'); return
       }
       setReview({ target: '', kind: 'register' })
+      return
+    }
+
+    if (mnToggle) {
+      if (!mnString.trim()) {
+        setFormError('Paste the registration string from your master node'); return
+      }
+      // Deliberately no format check beyond non-empty: the string is produced
+      // by `prepare_registration` on beldexd and validated by consensus. A
+      // client-side guess at its grammar would reject valid strings the moment
+      // the format changes.
+      if (unlocked !== null && unlocked <= 0n) {
+        setFormError('Registering a master node needs BDX for the stake and the network fee'); return
+      }
+      setReview({ target: '', kind: 'masternode' })
       return
     }
 
@@ -598,11 +625,15 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
         secrets: s.secrets,
         toAddress: target,
         amount: amount.trim(), // display units, e.g. "1.25" — in the token's own units when asset is set
-        priority: flash ? 5 : 1, // 5 = flash (instant) per wallet2.h tx_priority_flash
+        // 5 = flash (instant) per wallet2.h tx_priority_flash. A registration
+        // always goes at normal priority — flash is not offered on those tabs.
+        priority: (flash && !tokenToggle && !mnToggle) ? 5 : 1,
         onStatus: code => setSendStepCode(code),
         tokenId: asset?.tokenId,
         tokenDecimalPoint: asset?.decimalPoint,
         isDeployToken: tokenToggle,
+        isRegister: mnToggle,
+        registrationString: mnToggle ? mnString.trim() : undefined,
         tokenDescriptor: tokenToggle ? {
           ticker: tokenTicker.trim(),
           full_name: tokenFullName.trim(),
@@ -637,7 +668,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
       // only moves BDX as its fee, so recording that as "sent" would show a
       // phantom outgoing BDX transaction for the wrong amount — the next
       // refreshTokens() poll picks up the real token-side state instead.
-      if (!tokenToggle && !isTokenSend) {
+      if (!tokenToggle && !mnToggle && !isTokenSend) {
         await addPendingLocal(address, {
           hash: r.tx_hash,
           sentAtomic: r.total_sent ?? String(toAtomic(amount.trim())),
@@ -646,7 +677,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
       }
       setTxResult(r.tx_hash)
       setSendPhase('success')
-      setTo(''); setAmount(''); setTokenTicker(''); setTokenFullName(''); setTokenSupply(''); setTokenMaxSupply('')
+      setTo(''); setAmount(''); setTokenTicker(''); setTokenFullName(''); setTokenSupply(''); setTokenMaxSupply(''); setMnString('')
       if (creds) { refresh(creds); refreshTokens(creds) }
     } catch (e: any) {
       setSendError(e.message)
@@ -702,7 +733,8 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
         <Settings walletName={walletName} network={network}
           onBack={() => setView('home')} onWiped={onLocked} onChanged={onLocked}
           onLock={async () => { await sendToBackground({ type: 'LOCK' }); onLocked() }}
-          onRegisterToken={() => { setSendAsset(''); setTokenToggle(true); setTxResult(''); setFormError(''); setAssetPickerOpen(false); setPickerFromHome(false); setView('send') }} />
+          onRegisterToken={() => { setSendAsset(''); setMnToggle(false); setTokenToggle(true); setTxResult(''); setFormError(''); setAssetPickerOpen(false); setPickerFromHome(false); setView('send') }}
+          onRegisterMasternode={() => { setSendAsset(''); setTokenToggle(false); setMnToggle(true); setTxResult(''); setFormError(''); setAssetPickerOpen(false); setPickerFromHome(false); setView('send') }} />
       )}
       {view === 'receive' && (
         <Receive address={address} ticker={receiveToken?.ticker}
@@ -979,7 +1011,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
               {CONFIG.NETWORK_LABEL} — these coins have no value.
             </p>
           )}
-          {!tokenToggle ? (
+          {!tokenToggle && !mnToggle ? (
             <>
               <div className="settings-header" style={{ paddingLeft: 0, paddingRight: 0, marginLeft: -16 }}>
                 <button className="settings-back" title="Back" onClick={() => setView('home')}><ChevronLeftIcon size={22} /></button>
@@ -1005,10 +1037,10 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
               </div>
             </>
           ) : (
-            <h2>Register token</h2>
+            <h2>{mnToggle ? 'Register master node' : 'Register token'}</h2>
           )}
 
-          {!tokenToggle && <>
+          {!tokenToggle && !mnToggle && <>
             {/* Selecting BDX (value "") must behave byte-for-byte as before this
                 feature existed — everything below keys off isTokenSend/selectedToken,
                 never off sendAsset directly, so an empty selection carries no token fields.
@@ -1058,13 +1090,53 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
             </div>
           </>}
 
+          {mnToggle && <>
+            <h4 style={{ margin: '0 0 8px' }}>Register master node</h4>
+            <p className="muted" style={{ marginTop: -4 }}>
+              Run <b>prepare_registration</b> on your master node and paste the full
+              <b> register_master_node</b> command it prints. The stake, the operator cut and
+              the contributor addresses all come from that string — there is nothing else to
+              fill in here.
+            </p>
+            <textarea rows={5} placeholder="register_master_node …"
+              style={{ fontFamily: 'var(--mono)', fontSize: 11 }}
+              value={mnString} onChange={e => setMnString(e.target.value)} />
+
+            <div className="sub-balances" style={{ justifyContent: 'flex-start', gap: 6 }}>
+              <span>Available balance <b className="ok">{unlocked !== null ? fmtBDX(unlocked) : '—'} BDX</b></span>
+            </div>
+            <p className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+              The stake is locked by consensus until the node deregisters or expires.
+              Registration is sent at normal priority.
+            </p>
+
+            {formError && <p className="error">{formError}</p>}
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="btn-ghost" disabled={sending}
+                onClick={() => { setMnString(''); setFormError('') }}>
+                Reset
+              </button>
+              <button className="btn-primary" disabled={sending || !mnString.trim()} onClick={openReview}>
+                {sending ? 'Registering…' : 'Register'}
+              </button>
+            </div>
+            <button className="btn-ghost" style={{ width: '100%', marginTop: 8 }} disabled={sending}
+              onClick={() => { setMnToggle(false); setFormError(''); setView('home') }}>
+              ← Back
+            </button>
+          </>}
+
           {tokenToggle && <>
             <h4 style={{ margin: '0 0 8px' }}>New token</h4>
             <p className="muted" style={{ marginTop: -4 }}>
               {tokenRegInfo
                 ? <>Registering locks {fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX for{' '}
                     {Number(tokenRegInfo.collateral_lock_blocks).toLocaleString()} blocks. The collateral is
-                    returned when the lock expires; the network fee is separate.</>
+                    returned when the lock expires.
+                    {tokenRegInfo.registration_fee_amount
+                      ? <> It also costs a {fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX registration
+                          fee (half burned, half to governance), which is not returned.</>
+                      : null}{' '}The network fee is separate.</>
                 : 'Registering locks BDX collateral for a fixed period and mints the initial supply to this wallet; the network fee is separate.'}
             </p>
             <input placeholder="Ticker (e.g. POP)" value={tokenTicker}
@@ -1109,7 +1181,25 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
       {review && sendPhase === 'idle' && (
         <div className="modal-overlay" onClick={() => setReview(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            {review.kind === 'register' ? (
+            {review.kind === 'masternode' ? (
+              <>
+                <h2>Review registration</h2>
+                <p className="muted" style={{ margin: '0 0 4px' }}>Registration string</p>
+                {/* Shown in full and unwrapped-safe: this is the one thing being
+                    confirmed, and a truncated view would hide a paste error. */}
+                <div className="seed" style={{ wordBreak: 'break-all', maxHeight: 160, overflowY: 'auto' }}>
+                  {mnString.trim()}
+                </div>
+                <div className="detail-row">
+                  <span className="muted">Priority</span><span>Normal</span>
+                </div>
+                <p className="warn" style={{ marginTop: 10 }}>
+                  ⚠ This stakes BDX to a master node. The amount and the contributors come from the
+                  string above — check it against what your node printed. The stake is locked by
+                  consensus and this cannot be undone.
+                </p>
+              </>
+            ) : review.kind === 'register' ? (
               <>
                 <h2>Review registration</h2>
                 <div className="detail-row"><span className="muted">Ticker</span><span><b>{tokenTicker.trim()}</b></span></div>
@@ -1119,8 +1209,15 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
                 <div className="detail-row"><span className="muted">Decimals</span><span>{tokenDecimals}</span></div>
                 <div className="detail-row"><span className="muted">Initial supply</span><span>{tokenSupply.trim() || '0'}</span></div>
                 <div className="detail-row"><span className="muted">Max supply</span><span>{tokenMaxSupply.trim()}</span></div>
+                {tokenRegInfo && (
+                  <div className="detail-row"><span className="muted">Collateral (locked)</span><span>{fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX</span></div>
+                )}
+                {tokenRegInfo?.registration_fee_amount && (
+                  <div className="detail-row"><span className="muted">Registration fee</span><span>{fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX</span></div>
+                )}
                 <p className="warn" style={{ marginTop: 10 }}>
-                  ⚠ Registration locks BDX collateral and mints the initial supply to this wallet. This cannot be undone.
+                  ⚠ Registration locks BDX collateral{tokenRegInfo?.registration_fee_amount ? ', pays a registration fee that is not returned,' : ''} and
+                  mints the initial supply to this wallet. This cannot be undone.
                 </p>
               </>
             ) : (
@@ -1167,13 +1264,15 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
             <div className="row" style={{ marginTop: 12 }}>
               <button className="btn-ghost" onClick={() => setReview(null)}>Cancel</button>
               <button className="btn-primary"
-                disabled={review.kind !== 'register' && (reviewLoading || !!reviewErr || !review.target)}
+                disabled={review.kind !== 'register' && review.kind !== 'masternode'
+                  && (reviewLoading || !!reviewErr || !review.target)}
                 onClick={() => {
                   const target = review.target
                   setReview(null)
                   doSend(target)
                 }}>
-                {review.kind === 'register' ? 'Confirm registration' : 'Confirm send'}
+                {review.kind === 'register' || review.kind === 'masternode'
+                  ? 'Confirm registration' : 'Confirm send'}
               </button>
             </div>
           </div>
@@ -1201,7 +1300,9 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
                   <circle className="tick-circle" cx="26" cy="26" r="24" fill="none" />
                   <path className="tick-check" fill="none" d="M14 27 l8 8 l16 -16" />
                 </svg>
-                <h2 style={{ marginTop: 10 }}>{registeredResult ? 'Token registered!' : 'Sent!'}</h2>
+                <h2 style={{ marginTop: 10 }}>
+                  {registeredResult ? 'Token registered!' : mnToggle ? 'Master node registered!' : 'Sent!'}
+                </h2>
                 {registeredResult && (
                   <>
                     <p className="muted" style={{ marginBottom: 4 }}>{registeredResult.ticker || 'Token'} id</p>
@@ -1400,7 +1501,14 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
         )
       })()}
 
-      {error && <p className="error">{error}</p>}
+      {/* Connection trouble is status, not content: pinned to the bottom of the
+          panel so it never shoves the balance or history around, and never
+          competes with them for the top of the screen. */}
+      {error && (
+        <div className="status-footer">
+          <span className="error">{error}</span>
+        </div>
+      )}
     </div>
   )
 }

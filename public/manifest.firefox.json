@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Beldex Wallet",
-  "version": "1.2.0",
-  "description": "A light wallet for Beldex (BDX). Non-custodial: spend keys never leave your browser. Connects to Beldex dapps (bdx-web3js) with per-site approval.",
+  "version": "1.0.0",
+  "description": "Non-custodial Beldex (BDX) wallet. Send, receive, and connect to dapps with per-site approval.",
   "browser_specific_settings": {
     "gecko": {
       "id": "beldex-wallet@beldex.io",
@@ -64,7 +64,7 @@
     "notifications"
   ],
   "host_permissions": [
-    "https://lwsapi.beldex.io/*",
+    "https://lwsapi.rpcnode.stream/*",
     "https://explorer.beldex.io/*",
     "https://api.coingecko.com/*"
   ],
