@@ -32,6 +32,14 @@ const POLL_MS = 10_000 // Beldex block time ~30s; poll LWS every 10s while popup
 // that a genuinely dropped registration doesn't sit mislabelled all day.
 const UNMINED_GRACE_MS = 20 * 60 * 1000
 
+/** "about 6 months" for a lock of `blocks` at Beldex's 30 s target
+ *  (2,880 blocks a day; a month taken as 30 days). */
+function lockDuration(blocks: number): string {
+  const days = blocks / 2880
+  if (days >= 60) return `about ${Math.round(days / 30)} months`
+  return `about ${Math.max(1, Math.round(days))} day${Math.round(days) === 1 ? '' : 's'}`
+}
+
 type TokenLeg = TokenLegWire
 
 interface Tx {
@@ -206,7 +214,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
   const [mnString, setMnString] = useState('')
   const [tokenTicker, setTokenTicker] = useState('')
   const [tokenFullName, setTokenFullName] = useState('')
-  const [tokenDecimals, setTokenDecimals] = useState('8')
+  const [tokenDecimals, setTokenDecimals] = useState('')
   const [tokenSupply, setTokenSupply] = useState('')
   const [tokenMaxSupply, setTokenMaxSupply] = useState('')
   // What a just-completed registration produced — held separately from the
@@ -229,6 +237,17 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
   }, [view, tokenDetailId, tokenRows])
 
   useEffect(() => { tokenRegistrationInfo().then(setTokenRegInfo).catch(() => {}) }, [])
+
+  // Leaving the send page by any route (Back, the header, Settings, Done)
+  // clears what was typed, so it opens empty next time instead of showing
+  // the last recipient and amount.
+  useEffect(() => {
+    if (view === 'send') return
+    setTo(''); setResolved(null); setResolveErr(''); setAmount(''); setFlash(false)
+    setFormError(''); setReview(null); setReviewErr(''); setAssetSearch('')
+    setMnString('')
+    setTokenTicker(''); setTokenFullName(''); setTokenDecimals(''); setTokenSupply(''); setTokenMaxSupply('')
+  }, [view])
 
   const refreshTokens = async (c: lws.Credentials) => {
     setTokensLoading(true)
@@ -477,23 +496,26 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
     setResolved(null); setResolveErr('')
     const input = to.trim()
     if (!input || !looksLikeBnsName(input)) return
+    // A lookup still in flight when the field changes (or the send page is
+    // left and cleared) must not write its answer over the new state.
+    let current = true
     const t = setTimeout(async () => {
       setResolving(true)
       try {
         const addr = await resolveBnsWallet(input)
         if (addr) {
           await decodeAddress(addr) // sanity: daemon must return a valid address
-          setResolved({ name: input.toLowerCase(), address: addr })
-        } else {
+          if (current) setResolved({ name: input.toLowerCase(), address: addr })
+        } else if (current) {
           setResolveErr(`No wallet record for "${input}"`)
         }
       } catch (e: any) {
-        setResolveErr(`BNS lookup failed: ${e.message}`)
+        if (current) setResolveErr(`BNS lookup failed: ${e.message}`)
       } finally {
         setResolving(false)
       }
     }, 500)
-    return () => clearTimeout(t)
+    return () => { current = false; clearTimeout(t) }
   }, [to])
 
   /**
@@ -513,7 +535,8 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
         setFormError(`Ticker must be 1-${maxTicker} letters or digits`); return
       }
       if (tokenFullName.length > maxName) { setFormError(`Name must be at most ${maxName} characters`); return }
-      const dp = Number(tokenDecimals)
+      // Required: an empty box would read as Number('') = 0 decimals.
+      const dp = /^\d+$/.test(tokenDecimals.trim()) ? Number(tokenDecimals.trim()) : NaN
       if (!Number.isInteger(dp) || dp < 0 || dp > maxDp) {
         setFormError(`Decimals must be a whole number between 0 and ${maxDp}`); return
       }
@@ -717,6 +740,10 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
   // so scanned_block_height can briefly exceed it. Treat the max as the true tip.
   const scanned = info ? Number(info.scanned_block_height ?? 0) : 0
   const chainHeight = info ? Math.max(scanned, Number(info.blockchain_height ?? 0)) : 0
+  // Token registration collateral: how long it is locked, and roughly the
+  // block it comes back at (unknown until the wallet knows the chain tip).
+  const collateralLockBlocks = tokenRegInfo ? Number(tokenRegInfo.collateral_lock_blocks) || 0 : 0
+  const collateralUnlockAt = chainHeight > 0 && collateralLockBlocks > 0 ? chainHeight + collateralLockBlocks : null
   const synced = info && scanned >= chainHeight
 
   const openTokenRegistration = () => {
@@ -780,7 +807,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
           onBack={() => setView(receiveToken ? 'tokenDetail' : 'home')} />
       )}
       {view === 'addwallet' && (
-        <Onboarding addMode onDone={onLocked} onCancel={() => setView('home')} />
+        <Onboarding addMode embedded onDone={onLocked} onCancel={() => setView('home')} />
       )}
       {view === 'tokens' && (
         <Tokens
@@ -1086,7 +1113,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
                 feature existed — everything below keys off isTokenSend/selectedToken,
                 never off sendAsset directly, so an empty selection carries no token fields.
                 The asset is chosen up front on the picker screen, before this form renders. */}
-            <input placeholder="Recipient address or BNS name" value={to} onChange={e => setTo(e.target.value)} />
+            <input placeholder="Recipient address or BNS name" value={to} onChange={e => setTo(e.target.value)} autoFocus />
             {resolving && <p className="muted" style={{ marginTop: -6 }}>Resolving name…</p>}
             {resolved && (
               <div style={{ marginTop: -6, marginBottom: 8 }}>
@@ -1171,12 +1198,13 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
             <h4 style={{ margin: '0 0 8px' }}>New token</h4>
             <p className="muted" style={{ marginTop: -4 }}>
               {tokenRegInfo
-                ? <>Registering locks {fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX for{' '}
-                    {Number(tokenRegInfo.collateral_lock_blocks).toLocaleString()} blocks. The collateral is
-                    returned when the lock expires.
+                ? <>Registering locks {fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX as collateral for{' '}
+                    {collateralLockBlocks.toLocaleString()} blocks ({lockDuration(collateralLockBlocks)})
+                    {collateralUnlockAt ? <>, until about block {collateralUnlockAt.toLocaleString()}</> : null}.
+                    It comes back to this wallet when the lock ends.
                     {tokenRegInfo.registration_fee_amount
-                      ? <> It also costs a {fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX registration
-                          fee (half burned, half to governance), which is not returned.</>
+                      ? <> A registration fee of {fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX is also
+                          charged (half burned, half to governance) and is non-refundable.</>
                       : null}{' '}The network fee is separate.</>
                 : 'Registering locks BDX collateral for a fixed period and mints the initial supply to this wallet; the network fee is separate.'}
             </p>
@@ -1186,7 +1214,7 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
             <input placeholder="Full name" value={tokenFullName}
               onChange={e => setTokenFullName(e.target.value)}
               maxLength={Number(tokenRegInfo?.max_full_name_length) || 400} />
-            <input placeholder="Decimals (0-18)" inputMode="numeric" value={tokenDecimals}
+            <input placeholder={`Decimals, 0-${Number(tokenRegInfo?.max_decimal_point) || 18} (e.g. 8)`} inputMode="numeric" value={tokenDecimals}
               onChange={e => setTokenDecimals(e.target.value)} />
             <input placeholder="Initial supply" inputMode="decimal" value={tokenSupply}
               onChange={e => setTokenSupply(e.target.value)} />
@@ -1203,10 +1231,10 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
             {formError && <p className="error">{formError}</p>}
             <div className="row" style={{ marginTop: 10 }}>
               <button className="btn-ghost" disabled={sending}
-                onClick={() => { setTokenTicker(''); setTokenFullName(''); setTokenDecimals('8'); setTokenSupply(''); setTokenMaxSupply(''); setFormError('') }}>
+                onClick={() => { setTokenTicker(''); setTokenFullName(''); setTokenDecimals(''); setTokenSupply(''); setTokenMaxSupply(''); setFormError('') }}>
                 Reset
               </button>
-              <button className="btn-primary" disabled={sending || !tokenTicker.trim() || !tokenMaxSupply.trim()} onClick={openReview}>
+              <button className="btn-primary" disabled={sending || !tokenTicker.trim() || !tokenDecimals.trim() || !tokenMaxSupply.trim()} onClick={openReview}>
                 {sending ? 'Registering…' : 'Register'}
               </button>
             </div>
@@ -1253,12 +1281,20 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
                 {tokenRegInfo && (
                   <div className="detail-row"><span className="muted">Collateral (locked)</span><span>{fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX</span></div>
                 )}
+                {collateralUnlockAt && (
+                  <div className="detail-row"><span className="muted">Unlocks at</span><span>≈ block {collateralUnlockAt.toLocaleString()}</span></div>
+                )}
                 {tokenRegInfo?.registration_fee_amount && (
-                  <div className="detail-row"><span className="muted">Registration fee</span><span>{fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX</span></div>
+                  <div className="detail-row"><span className="muted">Non-refundable fee</span><span>{fmtBDX(BigInt(tokenRegInfo.registration_fee_amount))} BDX</span></div>
                 )}
                 <p className="warn" style={{ marginTop: 10 }}>
-                  ⚠ Registration locks BDX collateral{tokenRegInfo?.registration_fee_amount ? ', pays a registration fee that is not returned,' : ''} and
-                  mints the initial supply to this wallet. This cannot be undone.
+                  ⚠ {tokenRegInfo
+                    ? <>Your {fmtBDX(BigInt(tokenRegInfo.collateral_amount))} BDX collateral stays locked
+                        {collateralUnlockAt ? <> until about block {collateralUnlockAt.toLocaleString()}</> : <> for {collateralLockBlocks.toLocaleString()} blocks</>}
+                        {' '}({lockDuration(collateralLockBlocks)}) and cannot be spent before then.</>
+                    : <>Registration locks BDX collateral for a fixed period.</>}
+                  {tokenRegInfo?.registration_fee_amount ? ' The registration fee is non-refundable.' : ''}
+                  {' '}The initial supply is minted to this wallet. This cannot be undone.
                 </p>
               </>
             ) : (
