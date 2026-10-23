@@ -98,7 +98,9 @@ const METHOD_SCHEMAS: Record<DappMethod, MethodSchema> = {
     priority: { type: 'number' },
     // recognized-but-rejected downstream; kept so the handler still errors on it
     paymentId: { type: 'string', maxLen: 64 },
-    idempotencyKey: { type: 'string', maxLen: 128 }
+    idempotencyKey: { type: 'string', maxLen: 128 },
+    // HF22 token sends: amount is then TOKEN atomic units; fee stays BDX
+    tokenId: { type: 'string', maxLen: 64 }
   },
   bdx_getOperationStatus: { operationId: { type: 'string', maxLen: 128 } }
 }

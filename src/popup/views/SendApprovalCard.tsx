@@ -22,9 +22,14 @@ import type { WalletSecrets } from '../../lib/messages'
 
 export interface SendReqParams {
   to: string
-  amount?: string // atomic units
+  amount?: string // atomic units (TOKEN units when tokenId is set)
   priority: 1 | 2 | 3 | 4 | 5
   sweep: boolean
+  /** HF22 token send. Ticker/decimals are WALLET-resolved in the background
+   *  router (never page-supplied) before this card is ever rendered. */
+  tokenId?: string
+  tokenTicker?: string
+  tokenDecimalPoint?: number
 }
 
 /** Recompute + publish key-image-corrected balance figures for the dapp
@@ -58,6 +63,14 @@ function displayUnits(atomic: bigint): string {
   const whole = atomic / ATOMIC
   const frac = (atomic % ATOMIC).toString().padStart(DECIMALS, '0').replace(/0+$/, '')
   return frac ? `${whole}.${frac}` : whole.toString()
+}
+
+/** Same, parameterized by an HF22 token's own decimal point. */
+function displayTokenUnits(atomic: bigint, decimalPoint: number): string {
+  if (decimalPoint === 0) return atomic.toString()
+  const scale = 10n ** BigInt(decimalPoint)
+  const frac = (atomic % scale).toString().padStart(decimalPoint, '0').replace(/0+$/, '')
+  return frac ? `${atomic / scale}.${frac}` : (atomic / scale).toString()
 }
 
 type Phase = 'review' | 'signing' | 'success' | 'failed'
@@ -143,13 +156,18 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
       const s = await sendToBackground({ type: 'GET_SECRETS', expect })
       if (!s.ok || !s.secrets) throw new Error(s.ok ? 'Wallet locked — unlock and retry' : s.error)
 
+      const isToken = params.tokenId !== undefined
       const r = await sendFunds({
         secrets: s.secrets,
         toAddress: params.to,
-        // Bridge expects DISPLAY units; convert exactly from atomic.
-        amount: params.sweep ? '0' : displayUnits(amountAtomic!),
+        // Bridge expects DISPLAY units (the token's own units for HF22 sends);
+        // convert exactly from atomic.
+        amount: params.sweep ? '0'
+          : isToken ? displayTokenUnits(amountAtomic!, params.tokenDecimalPoint!)
+          : displayUnits(amountAtomic!),
         priority: params.priority,
         isSweeping: params.sweep,
+        ...(isToken ? { tokenId: params.tokenId, tokenDecimalPoint: params.tokenDecimalPoint } : {}),
         onStatus: code => setStepCode(code)
       })
 
@@ -247,17 +265,35 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
         <p className="muted" style={{ marginTop: 0 }}>
           This site asks <b>{walletName || 'your wallet'}</b> to send:
         </p>
+        {params.tokenId !== undefined && (
+          <div style={{
+            fontSize: 12, fontWeight: 700, color: '#b58900',
+            border: '1px dashed #b58900', padding: '6px 10px', marginBottom: 8
+          }}>
+            PRIVACY TOKEN TRANSFER — not BDX. Ticker and decimals shown are
+            resolved by this wallet from the chain.
+          </div>
+        )}
         <h4>Amount</h4>
         <div style={{ ...box, fontSize: 15, fontWeight: 700 }}>
-          {params.sweep ? 'ENTIRE SPENDABLE BALANCE (sweep)' : `${exactBDX(amountAtomic!)} BDX`}
+          {params.sweep ? 'ENTIRE SPENDABLE BALANCE (sweep)'
+            : params.tokenId !== undefined
+              ? `${displayTokenUnits(amountAtomic!, params.tokenDecimalPoint!)} ${params.tokenTicker}`
+              : `${exactBDX(amountAtomic!)} BDX`}
         </div>
+        {params.tokenId !== undefined && (
+          <>
+            <h4>Token id</h4>
+            <div style={box}>{params.tokenId}</div>
+          </>
+        )}
         <h4>To address — verify it in full</h4>
         <div style={box}>{params.to}</div>
         <h4>Priority</h4>
         <div style={box}>
           {params.priority}{params.priority === 5 ? ' — FLASH (instant, higher fee)' : ' — standard'}
         </div>
-        <h4>Network fee</h4>
+        <h4>Network fee{params.tokenId !== undefined ? ' (paid in BDX, not the token)' : ''}</h4>
         <div style={box}>
           {feeEstimate !== null
             ? <>Estimated ≈ <b>{exactBDX(feeEstimate)} BDX</b> — exact fee is computed during

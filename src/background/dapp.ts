@@ -511,8 +511,10 @@ function addressShapeOk(s: unknown): s is string {
 
 export interface ValidatedSend {
   to: string
-  /** integer string of atomic units; absent when sweeping */
+  /** integer string of atomic units (TOKEN units when tokenId set); absent when sweeping */
   amount?: string
+  /** HF22 privacy token id — the whole send is in that token; fee stays BDX. */
+  tokenId?: string
   priority: 1 | 2 | 3 | 4 | 5
   sweep: boolean
   /** Optional dapp-supplied idempotency key (external audit): retrying a send
@@ -522,6 +524,9 @@ export interface ValidatedSend {
 }
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._-]{8,128}$/
+/** HF22 token ids are opaque — bounded + wire-safe. Shared by the token reads
+ *  (bdx_getTokenBalance[s]/Info) and token-send validation. */
+const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 /** Validate bdx_sendTransaction params per PROTOCOL.md §4.5. Returns the
  *  normalized params or an error message naming the offending field. */
@@ -559,12 +564,21 @@ export function validateSendParams(params: unknown): { ok: true; send: Validated
     }
     idempotencyKey = p.idempotencyKey
   }
+  let tokenId: string | undefined
+  if (p.tokenId !== undefined) {
+    if (typeof p.tokenId !== 'string' || !TOKEN_ID_RE.test(p.tokenId)) {
+      return { ok: false, error: 'invalid field "tokenId" (1–64 chars of [A-Za-z0-9])' }
+    }
+    if (sweep) return { ok: false, error: '"sweep" is not supported for token sends' }
+    tokenId = p.tokenId
+  }
   return {
     ok: true,
     send: {
       to: (p.to as string).trim(), priority, sweep,
       ...(amount !== undefined ? { amount } : {}),
-      ...(idempotencyKey !== undefined ? { idempotencyKey } : {})
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      ...(tokenId !== undefined ? { tokenId } : {})
     }
   }
 }
@@ -651,7 +665,6 @@ export function validateSignParams(params: unknown): { ok: true; message: string
 // to when key-image verification is unavailable. Token sends ride
 // bdx_sendTransaction (separate change); registration is panel-only.
 
-const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 const MAX_TOKEN_IDS = 16
 
 /** LWS entry → dapp wire shape (PROTOCOL.md §4.4a). total = received − sent,
@@ -1183,6 +1196,25 @@ async function handleMethod(
       if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
       const v = validateSendParams(req.params)
       if (!v.ok) return fail(err(ERR.INVALID_PARAMS, v.error))
+      // HF22 token sends: the WALLET resolves ticker + decimal_point from its
+      // own LWS — never from page data — so the approval card can only ever
+      // display the amount the way the chain defines it. Unresolvable token →
+      // refuse now; raw atomic units must never reach the user for approval.
+      let tokenDisplay: { tokenTicker: string; tokenDecimalPoint: number } | null = null
+      if (v.send.tokenId) {
+        try {
+          const d = await lwsGetTokenInfo(v.send.tokenId)
+          if (typeof d?.decimal_point !== 'number' || typeof d?.ticker !== 'string') {
+            return fail(err(ERR.INVALID_PARAMS, 'token could not be resolved'))
+          }
+          tokenDisplay = { tokenTicker: d.ticker, tokenDecimalPoint: d.decimal_point }
+        } catch (e) {
+          if (isTokenLookupUnsupported(e)) {
+            return fail(err(ERR.INTERNAL, 'this server does not support token lookups'))
+          }
+          return fail(err(ERR.INVALID_PARAMS, 'bad or unknown token id'))
+        }
+      }
       // Idempotency (external audit): a retry with the same key must never
       // create a second approved payment. Replay the recorded outcome instead.
       if (v.send.idempotencyKey) {
@@ -1205,7 +1237,8 @@ async function handleMethod(
         // Atomic admission: the send-conflict + origin-conflict check and the
         // queue-write run under one mutex so two sends can't both be admitted.
         const a = await admitApproval({
-          origin, method: req.method, params: v.send as unknown as object, pageReqId: req.id,
+          origin, method: req.method,
+          params: { ...v.send, ...(tokenDisplay ?? {}) } as unknown as object, pageReqId: req.id,
           respond, panelOpenAttempt, walletId: activeId, sessionGeneration: generation, owner: port,
           requireNoSend: true
         })
