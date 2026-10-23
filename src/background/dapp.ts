@@ -26,6 +26,11 @@ import {
 } from '../lib/dappProtocol'
 // Pure arithmetic (@noble), no WASM and no window — safe in the service worker.
 import { addressSpendKey, verifyMessage } from '../lib/signMessage'
+import {
+  getTokenBalances as lwsGetTokenBalances, getTokenInfo as lwsGetTokenInfo,
+  isTokenLookupUnsupported
+} from '../lib/tokenApi'
+import type { TokenBalanceEntry } from '../lib/tokenApi'
 import type { WalletSecrets } from '../lib/messages'
 
 // Storage keys shared with background/index.ts — keep in sync.
@@ -640,6 +645,35 @@ export function validateSignParams(params: unknown): { ok: true; message: string
 // the server-issued nonce (and an optional requestId / expiry). See the
 // companion bdx-web3js `buildAuthChallenge()` — the format below must byte-match.
 
+// ---- HF22 privacy-token reads (dapp API v1.3) --------------------------------
+// Reads mirror bdx_getBalance gating (grant + rate limit + unlocked session).
+// Figures are the LWS's view-only numbers — same semantics the panel degrades
+// to when key-image verification is unavailable. Token sends ride
+// bdx_sendTransaction (separate change); registration is panel-only.
+
+const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
+const MAX_TOKEN_IDS = 16
+
+/** LWS entry → dapp wire shape (PROTOCOL.md §4.4a). total = received − sent,
+ *  floored at 0 (the server may overcount spends with decoys). */
+function tokenEntryForDapp(e: TokenBalanceEntry): {
+  tokenId: string; status: string; total: string; unlocked: string; locked: string
+  ticker?: string; decimalPoint?: number
+} {
+  const recv = BigInt(e.total_received || '0')
+  const sent = BigInt(e.total_sent || '0')
+  const total = recv > sent ? recv - sent : 0n
+  return {
+    tokenId: e.token_id,
+    status: e.status,
+    total: total.toString(),
+    unlocked: e.unlocked_balance || '0',
+    locked: e.locked_funds || '0',
+    ...(e.status === 'confirmed' && e.ticker !== undefined ? { ticker: e.ticker } : {}),
+    ...(e.status === 'confirmed' && e.decimal_point !== undefined ? { decimalPoint: e.decimal_point } : {})
+  }
+}
+
 const AUTH_PREFIX = 'beldex-auth-v1'
 const NONCE_RE = /^[A-Za-z0-9._-]{8,128}$/
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,64}$/
@@ -1027,6 +1061,82 @@ async function handleMethod(
         const known = e as { code?: number; message?: string }
         if (typeof known?.code === 'number') return fail(err(known.code, known.message ?? 'error'))
         return fail(err(ERR.INTERNAL, 'balance unavailable')) // sanitized
+      }
+    }
+
+    case 'bdx_getTokenBalance':
+    case 'bdx_getTokenBalances': {
+      const activeId = await grantedActiveId(origin)
+      if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
+      if (!readAllowed(origin)) return fail(err(ERR.INTERNAL, 'rate limited — slow down'))
+      const session = await getSession()
+      if (!session || session.walletId !== activeId) return fail(err(ERR.LOCKED, 'wallet locked'))
+
+      let ids: string[]
+      if (req.method === 'bdx_getTokenBalance') {
+        const tokenId = (req.params as { tokenId?: unknown } | undefined)?.tokenId
+        if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+          return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenId" (1–64 chars of [A-Za-z0-9])'))
+        }
+        ids = [tokenId]
+      } else {
+        const raw = (req.params as { tokenIds?: unknown } | undefined)?.tokenIds
+        if (raw === undefined) {
+          ids = []
+        } else if (typeof raw !== 'string') {
+          return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenIds" (comma-separated string)'))
+        } else {
+          ids = raw.split(',')
+          if (ids.length > MAX_TOKEN_IDS || ids.some(id => !TOKEN_ID_RE.test(id))) {
+            return fail(err(ERR.INVALID_PARAMS, `invalid field "tokenIds" (≤${MAX_TOKEN_IDS} ids, each 1–64 chars of [A-Za-z0-9])`))
+          }
+        }
+      }
+
+      try {
+        const r = await lwsGetTokenBalances(
+          { address: session.secrets.address, view_key: session.secrets.secViewKey }, ids)
+        const height = Number(r.scanned_height) || 0
+        if (req.method === 'bdx_getTokenBalances') {
+          return reply({ tokens: (r.tokens ?? []).map(tokenEntryForDapp), height })
+        }
+        const wanted = ids[0]
+        const entry = (r.tokens ?? []).find(t => t.token_id === wanted)
+        return reply(entry
+          ? { ...tokenEntryForDapp(entry), height }
+          : { tokenId: wanted, status: 'unknown', total: '0', unlocked: '0', locked: '0', height })
+      } catch (e) {
+        if (isTokenLookupUnsupported(e)) {
+          return fail(err(ERR.INTERNAL, 'this server does not support token lookups'))
+        }
+        return fail(err(ERR.INTERNAL, 'token lookup failed')) // sanitized
+      }
+    }
+
+    case 'bdx_getTokenInfo': {
+      // Public chain data, but grant + rate limit: the wallet is not an open
+      // LWS proxy for ungranted pages.
+      const activeId = await grantedActiveId(origin)
+      if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
+      if (!readAllowed(origin)) return fail(err(ERR.INTERNAL, 'rate limited — slow down'))
+      const tokenId = (req.params as { tokenId?: unknown } | undefined)?.tokenId
+      if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+        return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenId" (1–64 chars of [A-Za-z0-9])'))
+      }
+      try {
+        const d = await lwsGetTokenInfo(tokenId)
+        return reply({
+          tokenId: d.token_id, ticker: d.ticker, name: d.full_name,
+          owner: d.owner, metaInfo: d.meta_info,
+          currentSupply: d.current_supply, totalMaxSupply: d.total_max_supply,
+          decimalPoint: d.decimal_point
+        })
+      } catch (e) {
+        if (isTokenLookupUnsupported(e)) {
+          return fail(err(ERR.INTERNAL, 'this server does not support token lookups'))
+        }
+        // LWS answered 400 with a message: bad/unknown token id.
+        return fail(err(ERR.INVALID_PARAMS, 'bad or unknown token id'))
       }
     }
 

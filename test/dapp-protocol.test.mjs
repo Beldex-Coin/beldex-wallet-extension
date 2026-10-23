@@ -22,7 +22,8 @@ const METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage',
   'bdx_signAuthChallenge', 'bdx_verifyMessage',
-  'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'
+  'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState',
+  'bdx_getTokenBalance', 'bdx_getTokenBalances', 'bdx_getTokenInfo'
 ]
 
 test('dappProtocol.ts declares the exact protocol v1 method set', () => {

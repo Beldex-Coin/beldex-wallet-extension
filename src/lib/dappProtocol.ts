@@ -25,6 +25,7 @@ export const ERR = {
 
 export const DAPP_METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
+  'bdx_getTokenBalance', 'bdx_getTokenBalances', 'bdx_getTokenInfo',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage', 'bdx_signAuthChallenge',
   'bdx_verifyMessage', 'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'
 ] as const
@@ -73,6 +74,11 @@ const METHOD_SCHEMAS: Record<DappMethod, MethodSchema> = {
   bdx_getNetwork: null,
   bdx_getAddress: null,
   bdx_getBalance: null,
+  // HF22 privacy tokens (reads; token sends ride bdx_sendTransaction.tokenId).
+  bdx_getTokenBalance: { tokenId: { type: 'string', maxLen: 64 } },
+  // comma-separated id filter — params are primitives-only, so no arrays
+  bdx_getTokenBalances: { tokenIds: { type: 'string', maxLen: 1040 } },
+  bdx_getTokenInfo: { tokenId: { type: 'string', maxLen: 64 } },
   bdx_resolveBns: { name: { type: 'string', maxLen: 64 } },
   bdx_verifyMessage: {
     message: { type: 'string', maxLen: 8192 },

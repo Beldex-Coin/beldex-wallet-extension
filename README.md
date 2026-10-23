@@ -218,7 +218,7 @@ of truth in `src/lib/dappProtocol.ts` (`DAPP_METHODS`), and `test/dapp-protocol.
 
 - **Open (no grant), rate-limited:** `bdx_getState`, `bdx_getNetwork`, `bdx_resolveBns`,
   `bdx_verifyMessage`.
-- **Grant required:** `bdx_getAddress`, `bdx_getBalance`, `bdx_getOperationStatus`.
+- **Grant required:** `bdx_getAddress`, `bdx_getBalance`, `bdx_getTokenBalance`, `bdx_getTokenBalances`, `bdx_getTokenInfo` (HF22 token reads, v1.3+), `bdx_getOperationStatus`.
 - **Grant + user approval:** `bdx_connect`, `bdx_sendTransaction`, `bdx_signMessage`,
   `bdx_signAuthChallenge` — rendered in-panel when the panel is open, otherwise in a
   MetaMask-style popup anchored top-right.
