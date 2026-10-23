@@ -47,6 +47,19 @@ test('token send: malformed / oversize ids rejected', () => {
   }
 })
 
+const TEST_ADDR = '9' + 'V'.repeat(94)
+
+test('network-aware "to": testnet shapes pass on testnet, fail on mainnet (and vice versa)', () => {
+  assert.equal(validateSendParams({ to: TEST_ADDR, amount: '5' }, 'testnet').ok, true)
+  assert.equal(validateSendParams({ to: 'A' + 'V'.repeat(105), amount: '5' }, 'testnet').ok, true) // integrated
+  const wrong = validateSendParams({ to: TEST_ADDR, amount: '5' }) // default mainnet
+  assert.equal(wrong.ok, false)
+  assert.match(wrong.error, /mainnet address/)
+  assert.equal(validateSendParams({ to: ADDR, amount: '5' }, 'testnet').ok, false)
+  // token sends too
+  assert.equal(validateSendParams({ to: TEST_ADDR, amount: '5', tokenId: 'deadbeef01' }, 'testnet').ok, true)
+})
+
 test('token send: sweep is refused', () => {
   const r = validateSendParams({ to: ADDR, sweep: true, tokenId: 'deadbeef01' })
   assert.equal(r.ok, false)

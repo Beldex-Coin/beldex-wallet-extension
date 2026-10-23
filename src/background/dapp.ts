@@ -500,12 +500,21 @@ async function readBalance(): Promise<Record<string, unknown>> {
 const U64_MAX = 18_446_744_073_709_551_615n
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/
 
-/** Format-only address check (prefix/alphabet/length). The WASM fully
- *  re-validates (checksum, network) before signing — this is the cheap gate. */
-function addressShapeOk(s: unknown): s is string {
+/** Format-only address check (prefix/alphabet/length), per NETWORK — the
+ *  chain is a runtime per-wallet choice, so testnet shapes (consensus varint
+ *  prefixes 53/54 → leading '9'/'A'/'B', one byte shorter than mainnet's
+ *  two-byte 209 → 'bx') must pass on a testnet wallet and fail on mainnet.
+ *  The WASM fully re-validates (checksum, network) before signing — this is
+ *  the cheap gate. */
+function addressShapeOk(s: unknown, network: 'mainnet' | 'testnet' = 'mainnet'): s is string {
   if (typeof s !== 'string') return false
   const a = s.trim()
-  if (!a.startsWith('bx') || !BASE58_RE.test(a)) return false
+  if (!BASE58_RE.test(a)) return false
+  if (network === 'testnet') {
+    if (!'9AB'.includes(a[0] ?? '')) return false
+    return (a.length >= 93 && a.length <= 97) || (a.length >= 102 && a.length <= 108)
+  }
+  if (!a.startsWith('bx')) return false
   return (a.length >= 95 && a.length <= 99) || (a.length >= 104 && a.length <= 110)
 }
 
@@ -530,9 +539,13 @@ const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 /** Validate bdx_sendTransaction params per PROTOCOL.md §4.5. Returns the
  *  normalized params or an error message naming the offending field. */
-export function validateSendParams(params: unknown): { ok: true; send: ValidatedSend } | { ok: false; error: string } {
+export function validateSendParams(
+  params: unknown, network: 'mainnet' | 'testnet' = 'mainnet'
+): { ok: true; send: ValidatedSend } | { ok: false; error: string } {
   const p = (params ?? {}) as Record<string, unknown>
-  if (!addressShapeOk(p.to)) return { ok: false, error: 'invalid field "to" (BNS names must be resolved first)' }
+  if (!addressShapeOk(p.to, network)) {
+    return { ok: false, error: `invalid field "to" (not a ${network} address; BNS names must be resolved first)` }
+  }
   const sweep = p.sweep === true
   if (sweep && p.amount !== undefined) return { ok: false, error: '"sweep" and "amount" are mutually exclusive' }
   let amount: string | undefined
@@ -1194,7 +1207,7 @@ async function handleMethod(
     case 'bdx_sendTransaction': {
       const activeId = await grantedActiveId(origin)
       if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
-      const v = validateSendParams(req.params)
+      const v = validateSendParams(req.params, activeNetwork())
       if (!v.ok) return fail(err(ERR.INVALID_PARAMS, v.error))
       // HF22 token sends: the WALLET resolves ticker + decimal_point from its
       // own LWS — never from page data — so the approval card can only ever
