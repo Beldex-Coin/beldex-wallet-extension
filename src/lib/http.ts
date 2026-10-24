@@ -25,7 +25,7 @@ export interface FetchJsonOptions {
 /** Read the body with a hard byte ceiling, aborting the stream the moment it is
  *  exceeded so an unbounded/slow-drip response can't accumulate. Falls back to
  *  a buffered read where streaming isn't available. */
-async function readBounded(res: Response, maxBytes: number, onExceed: () => void): Promise<string> {
+export async function readBounded(res: Response, maxBytes: number, onExceed: () => void): Promise<string> {
   // Trust a declared Content-Length when present — reject before reading a byte.
   const declared = Number(res.headers.get('content-length') ?? '')
   if (Number.isFinite(declared) && declared > maxBytes) {

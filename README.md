@@ -207,6 +207,7 @@ separate storage.
 | `bdx_signMessage` / `bdx_verifyMessage` | done — approval-gated signing (`SignApprovalCard`), keyless public verify |
 | `bdx_signAuthChallenge` | done — wallet-composed sign-in proof (origin set by the wallet, not the page) |
 | `bdx_sendTransaction` operation recovery | done — `bdx_getOperationStatus` + optional `idempotencyKey` |
+| HF22 privacy tokens for dapps | done — `bdx_getTokenInfo`, `bdx_getTokenBalance`, token sends via `bdx_sendTransaction({ tokenId })` |
 | Subaddresses | **not supported by design** — the LWS cannot scan them (see below) |
 | Per-tx fee in history | not available — LWS doesn't return it; could be cached at send time |
 
@@ -218,10 +219,25 @@ of truth in `src/lib/dappProtocol.ts` (`DAPP_METHODS`), and `test/dapp-protocol.
 
 - **Open (no grant), rate-limited:** `bdx_getState`, `bdx_getNetwork`, `bdx_resolveBns`,
   `bdx_verifyMessage`.
-- **Grant required:** `bdx_getAddress`, `bdx_getBalance`, `bdx_getOperationStatus`.
+- **Grant required:** `bdx_getAddress`, `bdx_getBalance`, `bdx_getOperationStatus`,
+  `bdx_getTokenInfo`, `bdx_getTokenBalance`.
 - **Grant + user approval:** `bdx_connect`, `bdx_sendTransaction`, `bdx_signMessage`,
   `bdx_signAuthChallenge` — rendered in-panel when the panel is open, otherwise in a
   MetaMask-style popup anchored top-right.
+
+Send recipients are decoded in the service worker (prefix, length, checksum) and must belong to
+the active chain — standard, integrated or subaddress, the same set the panel's send accepts
+(mainnet integrated/subaddress forms read `4…`/`8…`, not `bx…`).
+
+**HF22 privacy tokens** (needs an LWS with the token endpoints — testnet today):
+`bdx_getTokenInfo` returns the LWS descriptor in the SDK's shape; `bdx_getTokenBalance` returns
+the server figures adjusted by the key-image correction the panel publishes
+(`corrected_token_balances`, same scheme as the BDX `corrected_balance`). A send with `tokenId`
+has its amount in the token's atomic units; the approval card looks the token's ticker and
+decimals up from the LWS itself — never from the page — shows the amount in those units with the
+full token id, and refuses the send if the token can't be resolved. The fee stays BDX, sweeping a
+token is refused, and (as with the panel) no local pending-history row is written for a token
+send. A server without token support answers `-32603`; an unknown id `-32602`.
 
 Sends take a global single-flight lock shared with the panel's own send flow, and the approval
 card shows a real WASM-computed fee estimate. Connected sites are listed (and revocable) in

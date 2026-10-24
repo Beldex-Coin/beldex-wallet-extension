@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import { addressForNettype } from '../src/lib/signMessage.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CANDIDATES = ['dist/background.js', 'dist-testnet/background.js',
@@ -21,7 +22,8 @@ const bundle = CANDIDATES.map(p => join(here, '..', p)).find(existsSync)
 
 const ORIGIN = 'https://shop.example'
 const SECRETS = {
-  address: 'bx' + 'a'.repeat(95), pubSpendKey: 'a'.repeat(64), secSpendKey: 'b'.repeat(64),
+  // A real (checksummed) mainnet address — it is also used as a send recipient.
+  address: addressForNettype('1'.repeat(64), '2'.repeat(64), 0), pubSpendKey: 'a'.repeat(64), secSpendKey: 'b'.repeat(64),
   pubViewKey: 'c'.repeat(64), secViewKey: 'd'.repeat(64), mnemonic: 'x', seed: 'y'
 }
 

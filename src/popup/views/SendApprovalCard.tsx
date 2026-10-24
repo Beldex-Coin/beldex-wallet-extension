@@ -7,6 +7,11 @@
 // shown before the user can approve. Fee is heuristic pre-approval (the
 // MyMonero-lineage bridge computes the real fee only during construction);
 // the EXACT fee paid is shown on the success screen and returned to the dapp.
+//
+// HF22 token sends (params.tokenId): the token's ticker and decimal_point are
+// looked up from the LWS here — never taken from the page — and the amount is
+// shown in those units with the full token id. If the token can't be resolved
+// the send is refused rather than showing raw atomic units. The fee stays BDX.
 
 import { useEffect, useState } from 'react'
 import { sendToBackground } from '../../lib/messages'
@@ -17,15 +22,22 @@ import { getBridge } from '../../lib/bridge'
 import { rawPost, getAddressInfo } from '../../lib/lws'
 import { correctedTotalSent } from '../../lib/spent'
 import { sessionStore } from '../../lib/sessionStore'
+import { getTokenInfo } from '../../lib/tokenApi'
+import { fmtToken } from '../../lib/tokenAmount'
+import { publishCorrectedTokenBalances } from '../../lib/tokenCorrection'
 import { useApprovalKeepalive } from '../useApprovalKeepalive'
 import type { WalletSecrets } from '../../lib/messages'
 
 export interface SendReqParams {
   to: string
-  amount?: string // atomic units
+  amount?: string // atomic units — the TOKEN's when tokenId is set
   priority: 1 | 2 | 3 | 4 | 5
   sweep: boolean
+  tokenId?: string
 }
+
+/** What the card needs to display a token send, resolved from the LWS. */
+interface ResolvedToken { ticker: string; name: string; decimalPoint: number }
 
 /** Recompute + publish key-image-corrected balance figures for the dapp
  *  bridge (shape kept in sync with Dashboard.tsx / background/dapp.ts). */
@@ -79,6 +91,28 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
   const [fee, setFee] = useState('')
 
   const amountAtomic = params.amount ? BigInt(params.amount) : null
+  const tokenId = params.tokenId
+  const [token, setToken] = useState<ResolvedToken | null>(null)
+  const [tokenErr, setTokenErr] = useState('')
+
+  useEffect(() => {
+    if (tokenId === undefined) return
+    let stop = false
+    ;(async () => {
+      try {
+        const t = await getTokenInfo(tokenId)
+        const decimalPoint = Number(t?.decimal_point)
+        if (!Number.isInteger(decimalPoint) || decimalPoint < 0 || decimalPoint > 18 || !t?.ticker) {
+          throw new Error('incomplete token descriptor')
+        }
+        if (!stop) setToken({ ticker: String(t.ticker), name: String(t.full_name ?? ''), decimalPoint })
+      } catch {
+        if (!stop) setTokenErr('This token could not be looked up, so the amount cannot be shown — the send is refused.')
+      }
+    })()
+    return () => { stop = true }
+  }, [tokenId])
+
   // Real pre-approval fee estimate via the WASM's estimated_tx_network_fee
   // (fed with the LWS's current per-byte fee). Null while loading / on failure
   // — the static heuristic text is the fallback.
@@ -121,6 +155,13 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
   }
 
   const approve = async () => {
+    // A token send is only ever built with the LWS-resolved decimals the user
+    // just reviewed — never without them.
+    const resolved = token
+    if (tokenId !== undefined && !resolved) {
+      setError(tokenErr || 'Still looking up the token — try again in a moment.')
+      return
+    }
     setPhase('signing'); setError(''); setStepCode(0)
     // Global single-flight send lock (shared with the panel's own send flow).
     const lock = await sendToBackground({ type: 'SEND_LOCK_ACQUIRE' })
@@ -146,32 +187,44 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
       const r = await sendFunds({
         secrets: s.secrets,
         toAddress: params.to,
-        // Bridge expects DISPLAY units; convert exactly from atomic.
-        amount: params.sweep ? '0' : displayUnits(amountAtomic!),
+        // Bridge expects DISPLAY units; convert exactly from atomic — in the
+        // token's own decimals for a token send.
+        amount: params.sweep ? '0'
+          : resolved ? fmtToken(amountAtomic!, resolved.decimalPoint) : displayUnits(amountAtomic!),
         priority: params.priority,
         isSweeping: params.sweep,
-        onStatus: code => setStepCode(code)
+        onStatus: code => setStepCode(code),
+        // Omitted entirely for BDX so that payload stays byte-for-byte as before.
+        ...(tokenId !== undefined && resolved ? { tokenId, tokenDecimalPoint: resolved.decimalPoint } : {})
       })
 
       const paidFee = r.used_fee ?? '0'
       setTxHash(r.tx_hash); setFee(paidFee)
       // Record locally so the tx shows in history IMMEDIATELY (⏳ pending),
       // before the LWS scanner indexes it — same store the panel's send uses.
-      await addPendingLocal(s.secrets.address, {
-        hash: r.tx_hash,
-        sentAtomic: String(r.total_sent ?? params.amount ?? '0'),
-        timestamp: new Date().toISOString()
-      }).catch(() => {})
+      // Not for token sends: like the panel, the token side shows up on the
+      // next token refresh, and recording it here would show a phantom BDX send.
+      if (tokenId === undefined) {
+        await addPendingLocal(s.secrets.address, {
+          hash: r.tx_hash,
+          sentAtomic: String(r.total_sent ?? params.amount ?? '0'),
+          timestamp: new Date().toISOString()
+        }).catch(() => {})
+      }
       // Publish a fresh key-image correction (this IS a WASM context) so the
       // background's balance overlay stays accurate after our spend — without
       // it, the raw LWS figures would collapse the dapp-visible balance to
-      // zero until the panel's next correction pass.
+      // zero until the panel's next correction pass. A token send spends BDX
+      // too (the fee), so this runs for both.
       await publishCorrectedBalance(s.secrets).catch(() => {})
       // Records the broadcast outcome (durable) before replying to the dapp.
       await sendToBackground({
         type: 'DAPP_COMPLETE', reqId, operationId, executionToken,
         result: { txHash: r.tx_hash, fee: String(paidFee) }
       })
+      // Token correction walks every token output's key image — slower, so it
+      // runs after the dapp has its answer.
+      if (tokenId !== undefined) void publishCorrectedTokenBalances(s.secrets).catch(() => {})
       setPhase('success')
     } catch (e: any) {
       // Full reason stays HERE in the wallet; the dapp gets a sanitized error.
@@ -249,15 +302,25 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
         </p>
         <h4>Amount</h4>
         <div style={{ ...box, fontSize: 15, fontWeight: 700 }}>
-          {params.sweep ? 'ENTIRE SPENDABLE BALANCE (sweep)' : `${exactBDX(amountAtomic!)} BDX`}
+          {params.sweep ? 'ENTIRE SPENDABLE BALANCE (sweep)'
+            : tokenId === undefined ? `${exactBDX(amountAtomic!)} BDX`
+              : token ? `${fmtToken(amountAtomic!, token.decimalPoint)} ${token.ticker}`
+                : tokenErr ? 'Unknown token' : 'Looking up token…'}
         </div>
+        {tokenId !== undefined && (
+          <>
+            <h4>Token{token ? ` — ${token.ticker}${token.name ? ` (${token.name})` : ''}` : ''}</h4>
+            <div style={box}>{tokenId}</div>
+            {tokenErr && <p className="error">{tokenErr}</p>}
+          </>
+        )}
         <h4>To address — verify it in full</h4>
         <div style={box}>{params.to}</div>
         <h4>Priority</h4>
         <div style={box}>
           {params.priority}{params.priority === 5 ? ' — FLASH (instant, higher fee)' : ' — standard'}
         </div>
-        <h4>Network fee</h4>
+        <h4>Network fee{tokenId !== undefined ? ' — paid in BDX' : ''}</h4>
         <div style={box}>
           {feeEstimate !== null
             ? <>Estimated ≈ <b>{exactBDX(feeEstimate)} BDX</b> — exact fee is computed during
@@ -271,7 +334,9 @@ export function SendApprovalCard({ reqId, origin, params, walletName, expect, on
       </p>
       <div className="row">
         <button className="btn-ghost" onClick={reject}>Reject</button>
-        <button className="btn-primary" onClick={approve}>Approve &amp; Send</button>
+        <button className="btn-primary" onClick={approve} disabled={tokenId !== undefined && !token}>
+          Approve &amp; Send
+        </button>
       </div>
       {error && <p className="error">{error}</p>}
     </>
