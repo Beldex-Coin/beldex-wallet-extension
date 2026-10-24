@@ -286,6 +286,58 @@ export function addressSpendKey(address: string): string | null {
  */
 export const ADDRESS_PREFIX: Readonly<Record<number, number>> = { 0: 209, 1: 53, 2: 24 }
 
+/**
+ * Every prefix the core's decode_address accepts per nettype — standard,
+ * integrated (8-byte payment id appended) and subaddress. Probed against the
+ * WASM; test/address.test.mjs pins it. The mainnet integrated and subaddress
+ * forms do NOT start with "bx" — they read "4…" and "8…".
+ */
+export const ADDRESS_PREFIXES: Readonly<Record<number, { standard: number; integrated: number; subaddress: number }>> = {
+  0: { standard: 209, integrated: 19, subaddress: 42 },
+  1: { standard: 53, integrated: 54, subaddress: 63 }
+}
+
+export type AddressKind = 'standard' | 'integrated' | 'subaddress'
+
+/**
+ * Which kind of address `address` is on `nettype`, or null if it is not a
+ * well-formed address for that chain: base58, a prefix that chain accepts, the
+ * exact body length for that kind, and a matching keccak checksum. Pure JS so
+ * the service worker can gate dapp sends with it; the WASM still re-validates
+ * (key points included) before anything is signed.
+ */
+export function addressKindForNettype(address: string, nettype: number): AddressKind | null {
+  const prefixes = ADDRESS_PREFIXES[nettype]
+  if (!prefixes || typeof address !== 'string' || address.length === 0 || address.length > 128) return null
+  let raw: Uint8Array
+  try {
+    raw = base58Decode(address)
+  } catch {
+    return null
+  }
+  let prefix = 0
+  let i = 0
+  for (;;) {
+    if (i >= raw.length || i >= 4) return null
+    const b = raw[i]!
+    prefix |= (b & 0x7f) << (7 * i)
+    i++
+    if ((b & 0x80) === 0) break
+  }
+  const kind: AddressKind | null =
+    prefix === prefixes.standard ? 'standard'
+      : prefix === prefixes.integrated ? 'integrated'
+        : prefix === prefixes.subaddress ? 'subaddress'
+          : null
+  if (!kind) return null
+  if (raw.length !== i + (kind === 'integrated' ? 72 : 64) + 4) return null
+  const body = raw.subarray(0, raw.length - 4)
+  const checksum = raw.subarray(raw.length - 4)
+  const expected = keccak_256(body).subarray(0, 4)
+  for (let j = 0; j < 4; j++) if (checksum[j] !== expected[j]) return null
+  return kind
+}
+
 /** LEB128, as used for the address prefix. */
 function varint(n: number): Uint8Array {
   const out: number[] = []

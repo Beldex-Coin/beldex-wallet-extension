@@ -9,6 +9,7 @@
 // of a blank screen or a claim the chain never made.
 
 import { CONFIG } from './config'
+import { HTTP, readBounded } from './http'
 import type { Credentials } from './lws'
 
 export interface TokenLookupError extends Error {
@@ -26,27 +27,47 @@ export function isTokenLookupUnsupported(e: unknown): e is TokenLookupError {
   return !!e && typeof e === 'object' && (e as TokenLookupError).tokenLookupUnsupported === true
 }
 
-async function post(endpoint: string, body: unknown): Promise<any> {
-  let res: Response
+// Same deadline + response-size budget as every other LWS read (lib/http.ts):
+// these calls are reachable from dapps (bdx_getTokenInfo / bdx_getTokenBalance),
+// so a slow-drip or oversized reply must not hold the worker or its memory.
+// Hand-rolled rather than fetchJson because a 400's body carries the server's
+// answer (bad/unknown token id) and must be read, not discarded.
+async function post(endpoint: string, body: unknown, opts: { bareBadRequestIsAnswer?: boolean } = {}): Promise<any> {
+  const { timeoutMs, maxBytes } = HTTP.LWS_READ
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    res = await fetch(`${CONFIG.LWS_URL}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-  } catch (e: any) {
-    throw unsupportedError(e?.message || 'Could not reach the server')
+    let res: Response
+    try {
+      res = await fetch(`${CONFIG.LWS_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+    } catch (e: any) {
+      throw unsupportedError(controller.signal.aborted ? 'The server did not answer in time' : e?.message || 'Could not reach the server')
+    }
+    if (res.status === 404 || res.status === 501) throw unsupportedError()
+    let data: any = null
+    try {
+      data = JSON.parse(await readBounded(res, maxBytes, () => controller.abort()))
+    } catch {
+      data = null
+    }
+    if (!res.ok) {
+      const serverMessage = data && typeof data === 'object' ? data.Error || data.error : undefined
+      // 400 with a message is the server answering properly (bad/unknown token
+      // id) — must not be reported as an unsupported server.
+      if (res.status === 400 && serverMessage) throw new Error(String(serverMessage))
+      if (res.status === 400 && opts.bareBadRequestIsAnswer) throw new Error('Unknown or invalid token id')
+      throw unsupportedError(serverMessage ? String(serverMessage) : `Server returned ${res.status}`)
+    }
+    if (data === null || typeof data !== 'object') throw unsupportedError('The server sent an unreadable reply')
+    return data
+  } finally {
+    clearTimeout(timer)
   }
-  if (res.status === 404 || res.status === 501) throw unsupportedError()
-  if (!res.ok) {
-    const data = await res.json().catch(() => null)
-    const serverMessage = data && typeof data === 'object' ? data.Error || data.error : undefined
-    // 400 with a message is the server answering properly (bad/unknown token
-    // id) — must not be reported as an unsupported server.
-    if (res.status === 400 && serverMessage) throw new Error(String(serverMessage))
-    throw unsupportedError(serverMessage ? String(serverMessage) : `Server returned ${res.status}`)
-  }
-  return res.json()
 }
 
 export type TokenStatus = 'confirmed' | 'not_found' | 'unknown'
@@ -94,9 +115,10 @@ export interface TokenDescriptor {
   decimal_point: number
 }
 
-/** Public chain data — no credentials. */
+/** Public chain data — no credentials. The LWS answers an unknown id with a
+ *  bare 400 (no body), which is a real "no such token", not an old server. */
 export function getTokenInfo(tokenId: string): Promise<TokenDescriptor> {
-  return post('/get_token_info', { token_id: tokenId })
+  return post('/get_token_info', { token_id: tokenId }, { bareBadRequestIsAnswer: true })
 }
 
 export function getTokenList(offset: number, count: number): Promise<{ token_ids: string[]; total_count: number }> {

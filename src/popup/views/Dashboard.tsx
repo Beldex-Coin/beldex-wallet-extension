@@ -24,6 +24,7 @@ import type { NetworkName } from '../../lib/config'
 import { getTokenBalances, fetchAllTokenOutputs, isTokenLookupUnsupported } from '../../lib/tokenApi'
 import { fmtToken, toTokenAtomic, groupDigits, shortenTokenId, tokenColor, UINT64_MAX } from '../../lib/tokenAmount'
 import { loadKnownTokenIds, rememberTokenIds, loadRegisteredTokens, appendRegisteredToken } from '../../lib/tokenStorage'
+import { storeCorrectedTokenBalances } from '../../lib/tokenCorrection'
 
 const POLL_MS = 10_000 // Beldex block time ~30s; poll LWS every 10s while popup is open
 // How long a just-broadcast registration is given before its absence from the
@@ -266,6 +267,9 @@ export function Dashboard({ address, walletName, wallets, network, onLocked }:
         try {
           const outs = await fetchAllTokenOutputs(c)
           verified = await verifiedTokenBalances(s, outs)
+          // Hand the correction to the dapp bridge (bdx_getTokenBalance), which
+          // cannot derive key images itself.
+          await storeCorrectedTokenBalances(s.address, reply.tokens, verified).catch(() => {})
         } catch {
           // older server or request failed — unverified figures still render
         }
