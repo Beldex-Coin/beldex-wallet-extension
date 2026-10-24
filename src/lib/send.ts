@@ -5,6 +5,7 @@
 // parser strings (destinations / to_address / send_amount).
 
 import { getBridge } from './bridge'
+import { CORE_SUPPORTS_TOKEN_TX } from './dappProtocol'
 import { CONFIG } from './config'
 import { rawPost } from './lws'
 import type { WalletSecrets } from './messages'
@@ -55,6 +56,9 @@ export interface SendResult {
 }
 
 export async function sendFunds(p: SendParams): Promise<SendResult> {
+  if ((p.tokenId !== undefined || p.isDeployToken) && !CORE_SUPPORTS_TOKEN_TX) {
+    throw new Error('This wallet core does not support token transactions yet — an updated @bdxi/beldex-app-bridge (HF22 send support) is required')
+  }
   const bridge = await getBridge()
 
   const passthrough = (endpoint: string) =>

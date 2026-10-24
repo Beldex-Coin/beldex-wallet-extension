@@ -30,6 +30,7 @@ import {
   getTokenBalances as lwsGetTokenBalances, getTokenInfo as lwsGetTokenInfo,
   isTokenLookupUnsupported
 } from '../lib/tokenApi'
+import { CORE_SUPPORTS_TOKEN_TX } from '../lib/dappProtocol'
 import type { TokenBalanceEntry } from '../lib/tokenApi'
 import type { WalletSecrets } from '../lib/messages'
 
@@ -1214,6 +1215,13 @@ async function handleMethod(
       // display the amount the way the chain defines it. Unresolvable token →
       // refuse now; raw atomic units must never reach the user for approval.
       let tokenDisplay: { tokenTicker: string; tokenDecimalPoint: number } | null = null
+      if (v.send.tokenId && !CORE_SUPPORTS_TOKEN_TX) {
+        // Fail BEFORE the approval surface: a card must never be shown for a
+        // transaction the core cannot build (and must never risk building as
+        // plain BDX). Clear, non-sanitized-sensitive message for integrators.
+        return fail(err(ERR.INTERNAL,
+          'token sends are not supported by this wallet core yet (token reads work; an updated WASM core is required)'))
+      }
       if (v.send.tokenId) {
         try {
           const d = await lwsGetTokenInfo(v.send.tokenId)

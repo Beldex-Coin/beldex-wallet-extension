@@ -23,6 +23,15 @@ export const ERR = {
   INTERNAL: -32603
 } as const
 
+/** Whether the installed @bdxi/beldex-app-bridge WASM can build HF22 token
+ *  transactions. Verified ABSENT through 3.0.2 (no token_id in the JS bridge
+ *  or the wasm binary — see docs/CORE_TOKEN_SEND_REQUIRED.md). Flip to true
+ *  ONLY when a core release with token-send support is pinned; until then
+ *  token sends are refused up front rather than risking the WASM silently
+ *  building a plain-BDX transaction from a token approval. Token READS are
+ *  LWS-side and unaffected. */
+export const CORE_SUPPORTS_TOKEN_TX = false
+
 export const DAPP_METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
   'bdx_getTokenBalance', 'bdx_getTokenBalances', 'bdx_getTokenInfo',
