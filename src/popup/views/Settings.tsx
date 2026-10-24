@@ -460,13 +460,6 @@ export function Settings({
         <span className="label">Register Master Node</span>
         <span className="chev">›</span>
       </div>
-      {/* Kept beside Register Token rather than on the main screen: both are
-          rare, deliberate actions that look like a send but are not one. */}
-      <div className="settings-item" onClick={onRegisterMasternode}>
-        <span className="icon"><NodeIcon /></span>
-        <span className="label">Register Master Node</span>
-        <span className="chev">›</span>
-      </div>
 
       <div className="settings-divider" />
       <div className="settings-section-label">Security</div>
