@@ -25,7 +25,7 @@ export const ERR = {
 
 export const DAPP_METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
-  'bdx_getTokenBalance', 'bdx_getTokenInfo',
+  'bdx_getTokenBalance', 'bdx_getTokenBalances', 'bdx_getTokenInfo',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage', 'bdx_signAuthChallenge',
   'bdx_verifyMessage', 'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'
 ] as const
@@ -99,6 +99,9 @@ const METHOD_SCHEMAS: Record<DappMethod, MethodSchema> = {
   },
   bdx_getOperationStatus: { operationId: { type: 'string', maxLen: 128 } },
   bdx_getTokenBalance: { tokenId: { type: 'string', maxLen: 64 } },
+  // every token the account holds; optional COMMA-SEPARATED id filter (params
+  // are primitives-only, so no arrays on the wire): <=16 ids, each <=64 alnum
+  bdx_getTokenBalances: { tokenIds: { type: 'string', maxLen: 1040 } },
   bdx_getTokenInfo: { tokenId: { type: 'string', maxLen: 64 } }
 }
 
