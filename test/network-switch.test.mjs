@@ -583,6 +583,7 @@ describe('network switching', { skip: bundle ? false : 'no built bundle — run 
     const acct = events.find(m => m.event === 'accountsChanged')
     assert.ok(net, 'networkChanged must be emitted')
     assert.equal(net.data.network, OTHER)
+    assert.equal(net.data.nettype, OTHER, 'PROTOCOL.md §5 names the field nettype — the SDK reads it')
     assert.ok(acct, 'accountsChanged must be emitted — the address changed too')
     assert.equal(acct.data.address, addrOf(KEYS_A, OTHER))
   })

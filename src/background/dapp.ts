@@ -25,7 +25,9 @@ import {
   validatePortMessage
 } from '../lib/dappProtocol'
 // Pure arithmetic (@noble), no WASM and no window — safe in the service worker.
-import { addressSpendKey, verifyMessage } from '../lib/signMessage'
+import { addressKindForNettype, addressSpendKey, verifyMessage } from '../lib/signMessage'
+import { getTokenBalances, getTokenInfo, isTokenLookupUnsupported } from '../lib/tokenApi'
+import type { TokenBalanceEntry } from '../lib/tokenApi'
 import type { WalletSecrets } from '../lib/messages'
 
 // Storage keys shared with background/index.ts — keep in sync.
@@ -38,6 +40,7 @@ const CACHE_KEY = 'sync_cache'
 const GRANTS_KEY = 'dapp_origins'          // storage.local
 const PENDING_KEY = 'dapp_pending'         // storage.session (metadata only)
 const CORRECTED_KEY = 'corrected_balance'  // storage.session, written by the panel (Dashboard)
+const CORRECTED_TOKENS_KEY = 'corrected_token_balances' // storage.session, written by the panel (Dashboard)
 const OPS_KEY = 'dapp_operations'          // storage.session: send operation state machine
 
 const APPROVAL_TTL_MS = 5 * 60_000
@@ -423,7 +426,9 @@ export async function dappInvalidateForNetwork(network: NetworkName): Promise<vo
  * that names this account on it.
  */
 export async function dappNotifyNetworkChanged(walletId: string, address: string): Promise<void> {
-  await broadcast('networkChanged', { network: nettype() }, walletId)
+  // `nettype` is the PROTOCOL.md §5 field the SDK reads; `network` is kept for
+  // existing listeners.
+  await broadcast('networkChanged', { nettype: nettype(), network: nettype() }, walletId)
   await broadcast('accountsChanged', { address }, walletId)
 }
 
@@ -490,23 +495,63 @@ async function readBalance(): Promise<Record<string, unknown>> {
   return info
 }
 
+// ---- HF22 token reads -------------------------------------------------------
+
+const TOKEN_STATUSES = new Set(['confirmed', 'not_found', 'unknown'])
+
+/**
+ * bdx_getTokenBalance's wire shape (PROTOCOL.md §4.4a) from one LWS entry.
+ *
+ * Same decoy problem as BDX: the server's total_sent counts every ring the
+ * token output was sampled into, so its total under-reports. The panel
+ * publishes, per token, the key-image-verified total next to the raw total it
+ * saw at the time; their difference is the overcount, which only grows and is
+ * unaffected by our own spends — so adding it to the current raw total stays
+ * accurate even after the figures move. Without a published correction the
+ * raw figures are served as-is.
+ */
+async function tokenBalanceForDapp(
+  entry: TokenBalanceEntry | undefined, tokenId: string, address: string, height: number
+): Promise<Record<string, unknown>> {
+  if (!entry) return { tokenId, status: 'unknown', total: '0', unlocked: '0', locked: '0', height }
+  const received = num(entry.total_received)
+  const sent = num(entry.total_sent)
+  const locked = num(entry.locked_funds)
+  let total = received > sent ? received - sent : 0n
+  const corr = (await sessionStore.get(CORRECTED_TOKENS_KEY))[CORRECTED_TOKENS_KEY]
+  const snap = corr && corr.address === address ? corr.tokens?.[tokenId] : undefined
+  if (snap) {
+    const rawAtSnap = num(snap.raw_total)
+    const verified = num(snap.verified_total)
+    if (verified > rawAtSnap) total += verified - rawAtSnap
+  }
+  const unlocked = total > locked ? total - locked : 0n
+  const status = TOKEN_STATUSES.has(entry.status) ? entry.status : 'unknown'
+  const confirmed = status === 'confirmed'
+  return {
+    tokenId, status,
+    total: total.toString(), unlocked: unlocked.toString(), locked: locked.toString(), height,
+    ...(confirmed && typeof entry.ticker === 'string' ? { ticker: entry.ticker } : {}),
+    ...(confirmed && Number.isInteger(entry.decimal_point) ? { decimalPoint: entry.decimal_point } : {})
+  }
+}
+
 // ---- send transaction validation + lock ------------------------------------
 
 const U64_MAX = 18_446_744_073_709_551_615n
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/
 
-/** Format-only address check (prefix/alphabet/length). The WASM fully
- *  re-validates (checksum, network) before signing — this is the cheap gate. */
-function addressShapeOk(s: unknown): s is string {
-  if (typeof s !== 'string') return false
-  const a = s.trim()
-  if (!a.startsWith('bx') || !BASE58_RE.test(a)) return false
-  return (a.length >= 95 && a.length <= 99) || (a.length >= 104 && a.length <= 110)
+/** Is `s` an address on the ACTIVE chain — standard, integrated or subaddress,
+ *  exactly the set the panel's send accepts? Decodes prefix, length and
+ *  checksum in pure JS (the WASM can't load here); the WASM re-validates
+ *  before signing. A testnet address is refused on mainnet and vice versa. */
+function addressOnActiveChain(s: unknown): s is string {
+  return typeof s === 'string' && addressKindForNettype(s.trim(), CONFIG.NETTYPE) !== null
 }
 
 export interface ValidatedSend {
   to: string
-  /** integer string of atomic units; absent when sweeping */
+  /** integer string of atomic units; absent when sweeping. In the TOKEN's
+   *  atomic units when tokenId is set. */
   amount?: string
   priority: 1 | 2 | 3 | 4 | 5
   sweep: boolean
@@ -514,17 +559,33 @@ export interface ValidatedSend {
    *  with the same key returns the existing operation's outcome instead of
    *  creating a second approved payment. */
   idempotencyKey?: string
+  /** HF22 privacy token the whole send is in. The approval surface resolves
+   *  its ticker and decimals from the LWS — never from the page. */
+  tokenId?: string
 }
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._-]{8,128}$/
+/** HF22 token ids are opaque — bounded and wire-safe is all we assert here;
+ *  the LWS decides whether the token exists. */
+const TOKEN_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 /** Validate bdx_sendTransaction params per PROTOCOL.md §4.5. Returns the
  *  normalized params or an error message naming the offending field. */
 export function validateSendParams(params: unknown): { ok: true; send: ValidatedSend } | { ok: false; error: string } {
   const p = (params ?? {}) as Record<string, unknown>
-  if (!addressShapeOk(p.to)) return { ok: false, error: 'invalid field "to" (BNS names must be resolved first)' }
+  if (!addressOnActiveChain(p.to)) {
+    return { ok: false, error: `invalid field "to" (not a ${CONFIG.NETWORK} address; BNS names must be resolved first)` }
+  }
   const sweep = p.sweep === true
   if (sweep && p.amount !== undefined) return { ok: false, error: '"sweep" and "amount" are mutually exclusive' }
+  let tokenId: string | undefined
+  if (p.tokenId !== undefined) {
+    if (typeof p.tokenId !== 'string' || !TOKEN_ID_RE.test(p.tokenId)) {
+      return { ok: false, error: 'invalid field "tokenId" (1–64 chars of [A-Za-z0-9])' }
+    }
+    if (sweep) return { ok: false, error: '"sweep" is not supported for token sends' }
+    tokenId = p.tokenId
+  }
   let amount: string | undefined
   if (!sweep) {
     if (typeof p.amount !== 'string' || !/^\d+$/.test(p.amount)) {
@@ -559,7 +620,8 @@ export function validateSendParams(params: unknown): { ok: true; send: Validated
     send: {
       to: (p.to as string).trim(), priority, sweep,
       ...(amount !== undefined ? { amount } : {}),
-      ...(idempotencyKey !== undefined ? { idempotencyKey } : {})
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      ...(tokenId !== undefined ? { tokenId } : {})
     }
   }
 }
@@ -1027,6 +1089,52 @@ async function handleMethod(
         const known = e as { code?: number; message?: string }
         if (typeof known?.code === 'number') return fail(err(known.code, known.message ?? 'error'))
         return fail(err(ERR.INTERNAL, 'balance unavailable')) // sanitized
+      }
+    }
+
+    case 'bdx_getTokenInfo':
+    case 'bdx_getTokenBalance': {
+      // HF22 token reads (PROTOCOL.md §4.4a/§4.4b). Grant-gated and rate-limited
+      // like bdx_getBalance: token info is public chain data, but answering it
+      // for ungranted pages would make the wallet a free LWS proxy, and token
+      // holdings are balance data.
+      const activeId = await grantedActiveId(origin)
+      if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
+      const tokenId = (req.params as { tokenId?: unknown } | undefined)?.tokenId
+      if (typeof tokenId !== 'string' || !TOKEN_ID_RE.test(tokenId)) {
+        return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenId" (1–64 chars of [A-Za-z0-9])'))
+      }
+      if (!readAllowed(origin)) return fail(err(ERR.INTERNAL, 'rate limited — slow down'))
+      try {
+        if (req.method === 'bdx_getTokenInfo') {
+          const t = await getTokenInfo(tokenId)
+          const decimalPoint = Number(t?.decimal_point)
+          if (!Number.isInteger(decimalPoint) || decimalPoint < 0 || decimalPoint > 18) {
+            return fail(err(ERR.INTERNAL, 'token descriptor unavailable'))
+          }
+          return reply({
+            tokenId: String(t.token_id ?? tokenId),
+            ticker: String(t.ticker ?? ''),
+            name: String(t.full_name ?? ''),
+            owner: String(t.owner ?? ''),
+            metaInfo: String(t.meta_info ?? ''),
+            currentSupply: num(t.current_supply).toString(),
+            totalMaxSupply: num(t.total_max_supply).toString(),
+            decimalPoint
+          })
+        }
+        const session = await getSession()
+        if (!session || session.walletId !== activeId) return fail(err(ERR.LOCKED, 'wallet locked'))
+        const r = await getTokenBalances(
+          { address: session.secrets.address, view_key: session.secrets.secViewKey }, [tokenId])
+        const entry = Array.isArray(r?.tokens) ? r.tokens.find(t => t?.token_id === tokenId) : undefined
+        const height = Number(r?.scanned_height ?? 0) || 0
+        return reply(await tokenBalanceForDapp(entry, tokenId, session.secrets.address, height))
+      } catch (e) {
+        // Unreachable, erroring, or token-unaware server — indistinguishable here.
+        if (isTokenLookupUnsupported(e)) return fail(err(ERR.INTERNAL, 'token lookup unavailable (server unreachable or without token support)'))
+        // The only other throw is the LWS answering 400 (bad/unknown id) — sanitized.
+        return fail(err(ERR.INVALID_PARAMS, 'unknown or invalid token id'))
       }
     }
 

@@ -20,6 +20,7 @@ const src = readFileSync(join(here, '../src/lib/dappProtocol.ts'), 'utf8')
 
 const METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
+  'bdx_getTokenBalance', 'bdx_getTokenInfo',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage',
   'bdx_signAuthChallenge', 'bdx_verifyMessage',
   'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'
@@ -126,6 +127,20 @@ test('unknown fields, wrong types, and non-primitive values are rejected', () =>
   // recognized fields only are copied through (no leftover junk)
   const r = parseDappRequest({ target: T, id: 'a', method: 'bdx_sendTransaction', params: { to: 'bxabc', amount: '100', sweep: false } })
   assert.deepEqual(r.params, { to: 'bxabc', amount: '100', sweep: false })
+})
+
+test('HF22 token fields are bounded like every other field', () => {
+  const id = 'a'.repeat(64)
+  for (const method of ['bdx_getTokenBalance', 'bdx_getTokenInfo']) {
+    assert.deepEqual(parseDappRequest({ target: T, id: 'a', method, params: { tokenId: id } }).params, { tokenId: id }, method)
+    assert.equal(parseDappRequest({ target: T, id: 'a', method, params: { tokenId: id + 'a' } }), null, `${method} oversized`)
+    assert.equal(parseDappRequest({ target: T, id: 'a', method, params: { tokenId: 7 } }), null, `${method} wrong type`)
+    assert.equal(parseDappRequest({ target: T, id: 'a', method, params: { tokenId: id, extra: 1 } }), null, `${method} extra field`)
+  }
+  // tokenId rides through on a send (semantic checks are the router's)
+  const r = parseDappRequest({ target: T, id: 'a', method: 'bdx_sendTransaction', params: { to: 'bxabc', amount: '5', tokenId: 'ab12' } })
+  assert.deepEqual(r.params, { to: 'bxabc', amount: '5', tokenId: 'ab12' })
+  assert.equal(parseDappRequest({ target: T, id: 'a', method: 'bdx_sendTransaction', params: { to: 'bxabc', amount: '5', tokenId: id + 'a' } }), null)
 })
 
 test('prototype-pollution keys are rejected, not copied', () => {

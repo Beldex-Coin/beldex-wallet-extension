@@ -41,8 +41,18 @@ function StrengthHint({ password }: { password: string }) {
   )
 }
 
-export function Onboarding({ onDone, addMode = false, onCancel }:
-  { onDone: () => void; addMode?: boolean; onCancel?: () => void }) {
+// The start menu sits a little above the true middle: centred exactly, it
+// reads as low on a tall side panel. The bottom padding lifts it by half its
+// height.
+const MENU_LIFT = '16vh'
+
+export function Onboarding({ onDone, addMode = false, onCancel, embedded = false }:
+  {
+    onDone: () => void; addMode?: boolean; onCancel?: () => void
+    /** Rendered inside the Dashboard, under its header: fill the space left
+     *  there rather than claim a second full-height page. */
+    embedded?: boolean
+  }) {
   const [mode, setMode] = useState<'menu' | 'create' | 'confirm' | 'restore'>('menu')
   // seed confirmation quiz: 5 random word positions; their words are shown
   // shuffled and must be tapped back in position order
@@ -88,7 +98,11 @@ export function Onboarding({ onDone, addMode = false, onCancel }:
 
   if (mode === 'menu') {
     return (
-      <div className="wrap" style={{ paddingTop: addMode ? 30 : 70 }}>
+      <div className="wrap" style={embedded
+        ? { height: 'auto', flex: '1 1 auto', width: '100%', paddingTop: 0, paddingLeft: 0, paddingRight: 0,
+            // + the Dashboard header's height, so it lines up with the standalone menu
+            paddingBottom: `calc(${MENU_LIFT} + 40px)`, justifyContent: 'center' }
+        : { justifyContent: 'center', paddingBottom: MENU_LIFT }}>
         <div className="center" style={{ marginBottom: 28 }}>
           <div className="brand lg" style={{ justifyContent: 'center' }}>
             <img src="icons/logo.svg" alt="" />

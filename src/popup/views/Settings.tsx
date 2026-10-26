@@ -103,7 +103,8 @@ export function Settings({
   onWiped: () => void
   onChanged: () => void
   onLock: () => void
-  onRegisterToken: () => void
+  /** Absent on a network that does not offer token registration. */
+  onRegisterToken?: () => void
   onRegisterMasternode: () => void
 }) {
   const [item, setItem] = useState<Item>('menu')
@@ -445,11 +446,13 @@ export function Settings({
 
       <div className="settings-divider" />
       <div className="settings-section-label">Register</div>
-      <div className="settings-item" onClick={onRegisterToken}>
-        <span className="icon"><PlusCircleIcon /></span>
-        <span className="label">Register Token</span>
-        <span className="chev">›</span>
-      </div>
+      {onRegisterToken && (
+        <div className="settings-item" onClick={onRegisterToken}>
+          <span className="icon"><PlusCircleIcon /></span>
+          <span className="label">Register Token</span>
+          <span className="chev">›</span>
+        </div>
+      )}
       {/* Kept beside Register Token rather than on the main screen: both are
           rare, deliberate actions that look like a send but are not one. */}
       <div className="settings-item" onClick={onRegisterMasternode}>
@@ -498,6 +501,10 @@ export function Settings({
         <span className="icon"><LockIcon /></span>
         <span className="label">Lock</span>
       </div>
+      {/* Read from the installed manifest, so it always matches the build. */}
+      <p className="muted center" style={{ margin: '12px 0 4px', fontSize: 11 }}>
+        Version {chrome.runtime.getManifest().version}
+      </p>
     </div>
   )
 }

@@ -25,6 +25,7 @@ export const ERR = {
 
 export const DAPP_METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
+  'bdx_getTokenBalance', 'bdx_getTokenInfo',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage', 'bdx_signAuthChallenge',
   'bdx_verifyMessage', 'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'
 ] as const
@@ -92,9 +93,13 @@ const METHOD_SCHEMAS: Record<DappMethod, MethodSchema> = {
     priority: { type: 'number' },
     // recognized-but-rejected downstream; kept so the handler still errors on it
     paymentId: { type: 'string', maxLen: 64 },
-    idempotencyKey: { type: 'string', maxLen: 128 }
+    idempotencyKey: { type: 'string', maxLen: 128 },
+    // HF22: the whole send is in this token (amount in its atomic units)
+    tokenId: { type: 'string', maxLen: 64 }
   },
-  bdx_getOperationStatus: { operationId: { type: 'string', maxLen: 128 } }
+  bdx_getOperationStatus: { operationId: { type: 'string', maxLen: 128 } },
+  bdx_getTokenBalance: { tokenId: { type: 'string', maxLen: 64 } },
+  bdx_getTokenInfo: { tokenId: { type: 'string', maxLen: 64 } }
 }
 
 /** Copy only the schema-recognized fields of `rawParams` into a fresh object,
