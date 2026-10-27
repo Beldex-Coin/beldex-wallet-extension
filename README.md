@@ -207,7 +207,7 @@ separate storage.
 | `bdx_signMessage` / `bdx_verifyMessage` | done — approval-gated signing (`SignApprovalCard`), keyless public verify |
 | `bdx_signAuthChallenge` | done — wallet-composed sign-in proof (origin set by the wallet, not the page) |
 | `bdx_sendTransaction` operation recovery | done — `bdx_getOperationStatus` + optional `idempotencyKey` |
-| HF22 privacy tokens for dapps | done — `bdx_getTokenInfo`, `bdx_getTokenBalance`, token sends via `bdx_sendTransaction({ tokenId })` |
+| HF22 privacy tokens for dapps | done — `bdx_getTokenInfo`, `bdx_getTokenBalance`, `bdx_getTokenBalances` (all held tokens, one call), token sends via `bdx_sendTransaction({ tokenId })` |
 | Subaddresses | **not supported by design** — the LWS cannot scan them (see below) |
 | Per-tx fee in history | not available — LWS doesn't return it; could be cached at send time |
 
@@ -220,7 +220,7 @@ of truth in `src/lib/dappProtocol.ts` (`DAPP_METHODS`), and `test/dapp-protocol.
 - **Open (no grant), rate-limited:** `bdx_getState`, `bdx_getNetwork`, `bdx_resolveBns`,
   `bdx_verifyMessage`.
 - **Grant required:** `bdx_getAddress`, `bdx_getBalance`, `bdx_getOperationStatus`,
-  `bdx_getTokenInfo`, `bdx_getTokenBalance`.
+  `bdx_getTokenInfo`, `bdx_getTokenBalance`, `bdx_getTokenBalances`.
 - **Grant + user approval:** `bdx_connect`, `bdx_sendTransaction`, `bdx_signMessage`,
   `bdx_signAuthChallenge` — rendered in-panel when the panel is open, otherwise in a
   MetaMask-style popup anchored top-right.
