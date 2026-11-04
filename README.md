@@ -50,17 +50,18 @@ Key invariants:
 
 MV3's CSP forbids `new Function` — `unsafe-eval` is never grantable, only `wasm-unsafe-eval`.
 Emscripten's embind used to assemble invokers with `new Function` (`createNamedFunction` /
-`craftInvokerFunction`); **`@bdxi/beldex-app-bridge` 3.0.1 ships the eval-free equivalents**
-(what `-sDYNAMIC_EXECUTION=0` emits), so the wallet no longer carries a `patch-package` patch —
-the dependency is **exact-pinned to 3.0.1** (no caret) so new glue *and* a new unaudited WASM
-binary can't install silently. `test/bridge.test.mjs` runs under
+`craftInvokerFunction`). The vendored glue and WASM in `vendor/beldex-app-bridge/` are built with
+`-sDYNAMIC_EXECUTION=0`, so embind marshals arguments at runtime and nothing in the generated output
+is edited by hand. `test/bridge.test.mjs` runs under
 `node --disallow-code-generation-from-strings` — the same restriction the browser CSP enforces —
-and exercises every bridge call the extension uses, so a CSP regression in any future bump fails
+and exercises every bridge call the extension uses, so a CSP regression in any future rebuild fails
 CI.
 
-**If `@bdxi/beldex-app-bridge` is ever bumped:** review the new glue diff, verify the WASM binary
-hash (recorded in the handoff notes), update the exact pin, and re-run the tests. The long-term
-fix is for `beldex-core-cpp` to ship `-sDYNAMIC_EXECUTION=0` builds with a reproducible recipe.
+**Rebuilding the WASM:** `scripts/build-wasm.sh` fetches every C++ source at a pinned commit,
+installs a pinned emsdk, builds in a fixed directory and compares the result byte for byte with
+`vendor/beldex-app-bridge/` (`--install` copies it in instead). To move to a newer core, update the
+commits in `SOURCES`, run it with `--install`, run the tests, and update the hashes in
+`README-AMO.md`.
 
 ## Setup
 
