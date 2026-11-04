@@ -1,6 +1,6 @@
 # Beldex Wallet: build notes for AMO reviewers
 
-- **Add-on:** Beldex Wallet 1.0.3
+- **Add-on:** Beldex Wallet 1.0.4
 - **Add-on ID:** `beldex-wallet@beldex.io`
 - **Publisher:** the Beldex team (https://beldex.io)
 - **Source:** https://github.com/Beldex-Coin/beldex-wallet-extension
@@ -48,32 +48,52 @@ no source maps or eval-based tooling. npm dependencies are pinned in `package-lo
 ## The crypto core (WebAssembly)
 
 All key handling and transaction signing is done by the Beldex crypto library: C++ from
-https://github.com/Beldex-Coin/beldex-core-cpp, compiled to WebAssembly with Emscripten. It ships as the
-package `@bdxi/beldex-app-bridge` 3.1.0 (wrapper source:
-https://github.com/Beldex-Coin/beldex-utils), which is kept in
+https://github.com/Beldex-Coin/beldex-core-cpp, compiled to WebAssembly with Emscripten. The JavaScript
+wrappers come from the package `@bdxi/beldex-app-bridge` 3.2.2 (source:
+https://github.com/Beldex-Coin/beldex-utils). The package is kept in
 [`vendor/beldex-app-bridge/`](vendor/beldex-app-bridge/) and installed through a `file:` dependency.
 
 | File | What it is | sha256 |
 |---|---|---|
-| `BeldexLibAppCpp_WASM.wasm` | The compiled crypto core | `63ef334eec3552352ee37328b6dca7174544105c88de74fe07ef246b780b798a` |
-| `BeldexLibAppCpp_WASM.js` | Emscripten-generated loader, not minified, with one change (below) | `2ba36781e7a1a817168fc6e87ccfde288ae768ed473d876e63d67492741b5553` |
-| `index.js` | Plain JavaScript wrappers from beldex-utils | |
+| `BeldexLibAppCpp_WASM.wasm` | The compiled crypto core | `538fb9e1f9487002dc16c82b78659a9aee86940dcc4c836f3a7f9a70db55e164` |
+| `BeldexLibAppCpp_WASM.js` | Emscripten-generated loader, not minified, unmodified | `f6fca26cfdff60cbe2b802d2c239e3182da52634f793a49ae210507ea3e15bff` |
+| `index.js`, `MyMonero*.js` | Plain JavaScript wrappers from beldex-utils, unmodified | |
 
-**Our one change to generated code.** Emscripten's loader normally builds some functions with
-`new Function`, which the MV3 CSP forbids. [`scripts/patch-embind-csp.mjs`](scripts/patch-embind-csp.mjs)
-replaces that single function (`craftInvokerFunction`) with one that does the same work without
-generating code. This is equivalent to what Emscripten emits with `-sDYNAMIC_EXECUTION=0`. The patch is
-already applied to the vendored file. To confirm it, run the script again, and it reports `already patched`:
+### Rebuilding the WASM from source
+
+[`scripts/build-wasm.sh`](scripts/build-wasm.sh) rebuilds both generated files and compares them byte for
+byte with the vendored ones:
 
 ```bash
-node scripts/patch-embind-csp.mjs vendor/beldex-app-bridge/BeldexLibAppCpp_WASM.js
+scripts/build-wasm.sh
 ```
 
-**Rebuilding the WASM from source:**
+It prints `MATCH` on success. It needs `git`, `python3`, `cmake` (tested 3.28.3), `make` and `curl`. It
+runs on Linux x86_64 or arm64, and the first run downloads about 400 MB of Emscripten SDK.
 
-- beldex-core-cpp commit: [FILL]
-- Emscripten version: [FILL]
-- Build command: [FILL]
+**Pinned inputs.** The script fetches each source at a fixed commit over public HTTPS. It also checks every
+commit against the gitlink its parent repository records.
+
+| Path | Repository | Commit |
+|---|---|---|
+| (root) | https://github.com/Beldex-Coin/beldex-libapp-js | `573be3c2f9f5d33fcf9249b69b9e316f1bb6c76f` |
+| `src/submodules/beldex-libapp-cpp` | https://github.com/Beldex-Coin/beldex-libapp-cpp | `58629c8dc0c14e68940ffbd0bc6fb5d1ec704fb2` |
+| `…/src/beldex-core-cpp` | https://github.com/Beldex-Coin/beldex-core-cpp | `bb259e68b718b00a86f2e8b3f58c1fb3e2824974` |
+| `…/contrib/beldex-core-custom` | https://github.com/Beldex-Coin/beldex-core-custom | `7f6f8d1560ef72a146dc68358faa12b46fcf41fe` |
+| `…/external/fmt` | https://github.com/fmtlib/fmt | `b6f4ceaed0a0a24ccf575fab6c56dd50ccf6f1a9` |
+| `…/external/oxen-encoding` | https://github.com/oxen-io/oxen-encoding | `462be41bd481b331dabeb3c220b349ef35c89e56` |
+
+- **Toolchain:** Emscripten 3.1.45, installed by the script from emsdk at commit
+  `c8dcb45665fec5e743336703f1d22a191810f2a8` (tag `3.1.45`). Emscripten supplies the Boost headers
+  itself (`-s USE_BOOST_HEADERS=1`), pinned by that version.
+- **Build:** `emcmake cmake -S . -B build -DCMAKE_EXE_LINKER_FLAGS=-sDYNAMIC_EXECUTION=0`, then
+  `emmake make -C build BeldexLibAppCpp_WASM`, using the project's own `CMakeLists.txt`.
+- **One flag added:** `-sDYNAMIC_EXECUTION=0` makes embind marshal arguments at runtime instead of
+  generating invokers with `new Function`, which the MV3 CSP forbids. Nothing in the generated output is
+  edited by hand.
+- **Fixed build directory:** everything is built under `/tmp/beldex-libapp-wasm`. Emscripten writes
+  absolute paths into the binary (assert messages in its system libraries and the `sourceMappingURL`
+  section), so a fixed location is what makes the output identical on every machine.
 
 ## Network access
 

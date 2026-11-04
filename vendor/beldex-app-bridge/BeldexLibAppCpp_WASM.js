@@ -1045,16 +1045,16 @@ function dbg(text) {
 // === Body ===
 
 var ASM_CONSTS = {
-  388996: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__error(JS__req_params); },  
- 389177: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__success(JS__req_params); },  
- 389360: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__error(JS__req_params); },  
- 389541: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__status_update(JS__req_params); },  
- 389730: () => { Module.fromCpp__SendFundsFormSubmission__willBeginSending({}); },  
- 389797: () => { Module.fromCpp__SendFundsFormSubmission__canceled({}); },  
- 389856: () => { Module.fromCpp__SendFundsFormSubmission__authenticate(); },  
- 389917: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__get_unspent_outs(JS__req_params); },  
- 390109: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__get_random_outs(JS__req_params); },  
- 390300: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__submit_raw_tx(JS__req_params); }
+  388420: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__error(JS__req_params); },  
+ 388601: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__success(JS__req_params); },  
+ 388784: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__error(JS__req_params); },  
+ 388965: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__status_update(JS__req_params); },  
+ 389154: () => { Module.fromCpp__SendFundsFormSubmission__willBeginSending({}); },  
+ 389221: () => { Module.fromCpp__SendFundsFormSubmission__canceled({}); },  
+ 389280: () => { Module.fromCpp__SendFundsFormSubmission__authenticate(); },  
+ 389341: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__get_unspent_outs(JS__req_params); },  
+ 389533: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__get_random_outs(JS__req_params); },  
+ 389724: ($0) => { const JS__req_params_string = Module.UTF8ToString($0); const JS__req_params = JSON.parse(JS__req_params_string); Module.fromCpp__SendFundsFormSubmission__submit_raw_tx(JS__req_params); }
 };
 
 
@@ -4498,104 +4498,87 @@ var ASM_CONSTS = {
       }
     };
   
-  
-  function createNamedFunction(name, body) {
-      name = makeLegalFunctionName(name);
-      // Use an abject with a computed property name to create a new function with
-      // a name specified at runtime, but without using `new Function` or `eval`.
-      return {
-        [name]: function() {
-          return body.apply(this, arguments);
-        }
-      }[name];
-    }
-  function newFunc(constructor, argumentList) {
-      if (!(constructor instanceof Function)) {
-        throw new TypeError(`new_ called with constructor type ${typeof(constructor)} which is not a function`);
-      }
-      /*
-       * Previously, the following line was just:
-       *   function dummy() {};
-       * Unfortunately, Chrome was preserving 'dummy' as the object's name, even
-       * though at creation, the 'dummy' has the correct constructor name.  Thus,
-       * objects created with IMVU.new would show up in the debugger as 'dummy',
-       * which isn't very helpful.  Using IMVU.createNamedFunction addresses the
-       * issue.  Doublely-unfortunately, there's no way to write a test for this
-       * behavior.  -NRD 2013.02.22
-       */
-      var dummy = createNamedFunction(constructor.name || 'unknownFunctionName', function(){});
-      dummy.prototype = constructor.prototype;
-      var obj = new dummy;
-  
-      var r = constructor.apply(obj, argumentList);
-      return (r instanceof Object) ? r : obj;
-    }
   function craftInvokerFunction(humanName, argTypes, classType, cppInvokerFunc, cppTargetFunc, /** boolean= */ isAsync) {
-      // MV3-CSP-safe rewrite of embind's invoker generation (scripts/patch-embind-csp.mjs).
-      //
-      // Upstream assembles the invoker's source as a string and compiles it with
-      // `newFunc(Function, args1)`. Extension pages forbid 'unsafe-eval', so that
-      // throws an EvalError the moment the first binding is registered and the
-      // whole bridge fails to load. This performs the identical marshalling at
-      // runtime instead, equivalent to Emscripten's -sDYNAMIC_EXECUTION=0 output.
+      // humanName: a human-readable string name for the function to be generated.
+      // argTypes: An array that contains the embind type objects for all types in the function signature.
+      //    argTypes[0] is the type object for the function return value.
+      //    argTypes[1] is the type object for function this object/class type, or null if not crafting an invoker for a class method.
+      //    argTypes[2...] are the actual function parameters.
+      // classType: The embind type object for the class to be bound, or null if this is not a method of a class.
+      // cppInvokerFunc: JS Function object to the C++-side function that interops into C++ code.
+      // cppTargetFunc: Function pointer (an integer to FUNCTION_TABLE) to the target C++ function the cppInvokerFunc will end up calling.
+      // isAsync: Optional. If true, returns an async function. Async bindings are only supported with JSPI.
       var argCount = argTypes.length;
-
+  
       if (argCount < 2) {
         throwBindingError("argTypes array size mismatch! Must at least get return value and 'this' types!");
       }
-
+  
       assert(!isAsync, 'Async bindings are only supported with JSPI.');
-
+  
       var isClassMethodFunc = (argTypes[1] !== null && classType !== null);
-
-      // A type with no destructorFunction cannot be torn down individually, so
-      // the whole call needs a destructor stack.
+  
+      // Free functions with signature "void function()" do not need an invoker that marshalls between wire types.
+  // TODO: This omits argument count check - enable only at -O3 or similar.
+  //    if (ENABLE_UNSAFE_OPTS && argCount == 2 && argTypes[0].name == "void" && !isClassMethodFunc) {
+  //       return FUNCTION_TABLE[fn];
+  //    }
+  
+      // Determine if we need to use a dynamic stack to store the destructors for the function parameters.
+      // TODO: Remove this completely once all function invokers are being dynamically generated.
       var needsDestructorStack = false;
-      for (var i = 1; i < argTypes.length; ++i) {
-        if (argTypes[i] !== null && argTypes[i].destructorFunction === undefined) {
+  
+      for (var i = 1; i < argTypes.length; ++i) { // Skip return value at index 0 - it's not deleted here.
+        if (argTypes[i] !== null && argTypes[i].destructorFunction === undefined) { // The type does not define a destructor function - must use dynamic stack
           needsDestructorStack = true;
           break;
         }
       }
-
+  
       var returns = (argTypes[0].name !== "void");
+  
       var expectedArgCount = argCount - 2;
-
-      return createNamedFunction(makeLegalFunctionName(humanName), function() {
+      var argsWired = new Array(expectedArgCount);
+      var invokerFuncArgs = [];
+      var destructors = [];
+      return function() {
         if (arguments.length !== expectedArgCount) {
-          throwBindingError('function ' + humanName + ' called with ' + arguments.length + ' arguments, expected ' + expectedArgCount);
+          throwBindingError(`function ${humanName} called with ${arguments.length} arguments, expected ${expectedArgCount}`);
         }
-        var destructors = needsDestructorStack ? [] : null;
+        destructors.length = 0;
         var thisWired;
-        var argsWired = new Array(expectedArgCount);
-        var invokerArgs = [cppTargetFunc];
-
+        invokerFuncArgs.length = isClassMethodFunc ? 2 : 1;
+        invokerFuncArgs[0] = cppTargetFunc;
         if (isClassMethodFunc) {
-          thisWired = argTypes[1].toWireType(destructors, this);
-          invokerArgs.push(thisWired);
+          thisWired = argTypes[1]['toWireType'](destructors, this);
+          invokerFuncArgs[1] = thisWired;
         }
         for (var i = 0; i < expectedArgCount; ++i) {
-          argsWired[i] = argTypes[i + 2].toWireType(destructors, arguments[i]);
-          invokerArgs.push(argsWired[i]);
+          argsWired[i] = argTypes[i + 2]['toWireType'](destructors, arguments[i]);
+          invokerFuncArgs.push(argsWired[i]);
         }
-
-        var rv = cppInvokerFunc.apply(null, invokerArgs);
-
-        if (needsDestructorStack) {
-          runDestructors(destructors);
-        } else {
-          for (var i = isClassMethodFunc ? 1 : 2; i < argTypes.length; ++i) {
-            var param = (i === 1) ? thisWired : argsWired[i - 2];
-            if (argTypes[i].destructorFunction !== null) {
-              argTypes[i].destructorFunction(param);
+  
+        var rv = cppInvokerFunc.apply(null, invokerFuncArgs);
+  
+        function onDone(rv) {
+          if (needsDestructorStack) {
+            runDestructors(destructors);
+          } else {
+            for (var i = isClassMethodFunc ? 1 : 2; i < argTypes.length; i++) {
+              var param = i === 1 ? thisWired : argsWired[i - 2];
+              if (argTypes[i].destructorFunction !== null) {
+                argTypes[i].destructorFunction(param);
+              }
             }
           }
+  
+          if (returns) {
+            return argTypes[0]['fromWireType'](rv);
+          }
         }
-
-        if (returns) {
-          return argTypes[0].fromWireType(rv);
-        }
-      });
+  
+        return onDone(rv);
+      };
     }
   
   var ensureOverloadTable = (proto, methodName, humanName) => {
@@ -4732,6 +4715,16 @@ var ASM_CONSTS = {
   
   
   
+  function createNamedFunction(name, body) {
+      name = makeLegalFunctionName(name);
+      // Use an abject with a computed property name to create a new function with
+      // a name specified at runtime, but without using `new Function` or `eval`.
+      return {
+        [name]: function() {
+          return body.apply(this, arguments);
+        }
+      }[name];
+    }
   var extendError = (baseErrorType, errorName) => {
       var errorClass = createNamedFunction(errorName, function(message) {
         this.name = errorName;
@@ -7099,7 +7092,6 @@ var unexportedSymbols = [
   'simpleReadValueFromPointer',
   'readPointer',
   'runDestructors',
-  'newFunc',
   'craftInvokerFunction',
   'embind__requireFunction',
   'finalizationRegistry',
@@ -7267,7 +7259,7 @@ run();
 
 
 // end include: postamble.js
-// include: /home/z034/lws-con-asst/beldex-libapp-js/src/module-post.js
+// include: /tmp/beldex-libapp-wasm/src/src/module-post.js
 Module['ready'] = new Promise(function (resolve, reject) {
   delete Module['then']
   Module['onAbort'] = function (what) {
@@ -7277,7 +7269,7 @@ Module['ready'] = new Promise(function (resolve, reject) {
     resolve(Module)
   })
 })
-// end include: /home/z034/lws-con-asst/beldex-libapp-js/src/module-post.js
+// end include: /tmp/beldex-libapp-wasm/src/src/module-post.js
 
 
   return moduleArg.ready
