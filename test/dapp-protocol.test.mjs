@@ -20,7 +20,7 @@ const src = readFileSync(join(here, '../src/lib/dappProtocol.ts'), 'utf8')
 
 const METHODS = [
   'bdx_connect', 'bdx_disconnect', 'bdx_getAddress', 'bdx_getBalance',
-  'bdx_getTokenBalance', 'bdx_getTokenInfo',
+  'bdx_getTokenBalance', 'bdx_getTokenBalances', 'bdx_getTokenInfo',
   'bdx_sendTransaction', 'bdx_getOperationStatus', 'bdx_signMessage',
   'bdx_signAuthChallenge', 'bdx_verifyMessage',
   'bdx_resolveBns', 'bdx_getNetwork', 'bdx_getState'

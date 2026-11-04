@@ -1092,6 +1092,52 @@ async function handleMethod(
       }
     }
 
+    case 'bdx_getTokenBalances': {
+      // The dapp twin of the panel's Tokens screen (PROTOCOL.md §4.4c): with
+      // no filter, every token the account holds in one call. Same gating as
+      // bdx_getBalance — the holdings list is balance data. Optional ids ALSO
+      // ask about tokens not yet held (comma-separated: params are
+      // primitives-only on the wire, and the id charset has no comma).
+      const activeId = await grantedActiveId(origin)
+      if (!activeId) return fail(err(ERR.UNAUTHORIZED, 'origin not connected'))
+      if (!readAllowed(origin)) return fail(err(ERR.INTERNAL, 'rate limited — slow down'))
+      const raw = (req.params as { tokenIds?: unknown } | undefined)?.tokenIds
+      let ids: string[] = []
+      if (raw !== undefined) {
+        if (typeof raw !== 'string') return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenIds" (comma-separated string)'))
+        ids = raw.split(',')
+        if (ids.length > 16 || ids.some(id => !TOKEN_ID_RE.test(id))) {
+          return fail(err(ERR.INVALID_PARAMS, 'invalid field "tokenIds" (≤16 ids, each 1–64 chars of [A-Za-z0-9])'))
+        }
+      }
+      const session = await getSession()
+      if (!session || session.walletId !== activeId) return fail(err(ERR.LOCKED, 'wallet locked'))
+      try {
+        const r = await getTokenBalances(
+          { address: session.secrets.address, view_key: session.secrets.secViewKey }, ids)
+        const height = Number(r?.scanned_height ?? 0) || 0
+        const entries = Array.isArray(r?.tokens) ? r.tokens : []
+        const seen = new Set<string>()
+        const tokens: Array<Record<string, unknown>> = []
+        for (const e of entries) {
+          if (!e?.token_id || seen.has(e.token_id)) continue
+          seen.add(e.token_id)
+          const { height: _h, ...rest } = await tokenBalanceForDapp(e, e.token_id, session.secrets.address, height)
+          tokens.push(rest)
+        }
+        for (const id of ids) { // asked-about ids the server didn't echo
+          if (seen.has(id)) continue
+          seen.add(id)
+          const { height: _h, ...rest } = await tokenBalanceForDapp(undefined, id, session.secrets.address, height)
+          tokens.push(rest)
+        }
+        return reply({ tokens, height })
+      } catch (e) {
+        if (isTokenLookupUnsupported(e)) return fail(err(ERR.INTERNAL, 'token lookup unavailable (server unreachable or without token support)'))
+        return fail(err(ERR.INTERNAL, 'token lookup failed'))
+      }
+    }
+
     case 'bdx_getTokenInfo':
     case 'bdx_getTokenBalance': {
       // HF22 token reads (PROTOCOL.md §4.4a/§4.4b). Grant-gated and rate-limited
