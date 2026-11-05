@@ -9,3 +9,5 @@ firefox-testnet/
 .DS_Store
 SECURITY_AUDIT.md
 HANDOFF.md
+build/
+package-lock.json
