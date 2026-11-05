@@ -49,7 +49,7 @@ no source maps or eval-based tooling. npm dependencies are pinned in `package-lo
 
 All key handling and transaction signing is done by the Beldex crypto library: C++ from
 https://github.com/Beldex-Coin/beldex-core-cpp, compiled to WebAssembly with Emscripten. The JavaScript
-wrappers come from the package `@bdxi/beldex-app-bridge` 3.2.2 (source:
+wrappers come from the package `@bdxi/beldex-app-bridge` 4.0.0 (source:
 https://github.com/Beldex-Coin/beldex-utils). The package is kept in
 [`vendor/beldex-app-bridge/`](vendor/beldex-app-bridge/) and installed through a `file:` dependency.
 
