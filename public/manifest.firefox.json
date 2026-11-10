@@ -8,7 +8,8 @@
       "id": "beldex-wallet@beldex.io",
       "data_collection_permissions": {
         "required": [
-          "financialAndPaymentInfo"
+          "financialAndPaymentInfo",
+          "authenticationInfo"
         ]
       },
       "strict_min_version": "140.0"

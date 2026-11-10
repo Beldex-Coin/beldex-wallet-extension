@@ -281,10 +281,11 @@ Settings and in a bottom site bar.
    older versions the provider would land in the isolated world, and dapps wouldn't see
    `window.beldex`. 140 is the first version with Firefox's built-in data-collection consent.
    Supporting anything older would mean building our own consent screen.
-5. **AMO data-collection declaration** is `required: ["financialAndPaymentInfo"]`. While the
-   wallet is unlocked, it sends the address and private view key to the LWS every 30 seconds,
-   and it broadcasts signed transactions through the LWS. Mozilla counts any data handled outside
-   the browser, so `"none"` would be wrong. Firefox asks the user to consent at install time.
+5. **AMO data-collection declaration** is `required: ["financialAndPaymentInfo",
+   "authenticationInfo"]`. While the wallet is unlocked, it sends the address and private view key
+   to the LWS every 30 seconds, and it broadcasts signed transactions through the LWS. The LWS
+   also uses the address and view key as the account's login. Mozilla counts any data handled
+   outside the browser, so `"none"` would be wrong. Firefox asks the user to consent at install time.
 6. **Verify before mainnet ship.** Send end-to-end on testnet after any core/bridge bump —
    CLSAG since HF15, Bulletproofs+ since HF20.
 

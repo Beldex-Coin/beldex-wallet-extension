@@ -21,9 +21,11 @@
 #      resolved config, host_permissions and per-file sha256 hashes of both
 #      outputs are recorded in release/build-manifest-v<V>.json, which also
 #      cross-checks each built manifest.json against the reviewed config.
-#   5. Reproduce-and-compare: the source zip is extracted to a temp dir,
-#      rebuilt from scratch (`npm ci` + build), and the rebuilt outputs must be
-#      byte-identical to the packaged ones — otherwise the release aborts.
+#   5. Reproduce-and-compare: the source zip is extracted to a temp dir and
+#      checked to hold no Emscripten output (.gitattributes keeps it out).
+#      It is then rebuilt from scratch: the WASM core from pinned source
+#      (scripts/build-wasm.sh), then `npm ci` and the build. The rebuilt outputs
+#      must be byte-identical to the packaged ones, or the release aborts.
 #   6. Signing: the manifest is detach-signed when RELEASE_SIGNING_KEY is set;
 #      otherwise the run ends with a prominent UNSIGNED warning.
 #
@@ -90,7 +92,16 @@ echo "[package] verifying: rebuilding from the source zip and comparing..."
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 unzip -q "release/beldex-wallet-source-v$V.zip" -d "$TMP/src"
-(cd "$TMP/src" && npm ci --silent && npm run build --silent)
+# AMO rejects source packages that contain generated code. The WASM core and
+# its Emscripten loader must come from scripts/build-wasm.sh, not from the zip.
+for f in BeldexLibAppCpp_WASM.js BeldexLibAppCpp_WASM.wasm; do
+  if [ -e "$TMP/src/vendor/beldex-app-bridge/$f" ]; then
+    echo "ERROR: the source zip contains generated vendor/beldex-app-bridge/$f." >&2
+    echo "It must be export-ignored in .gitattributes." >&2
+    exit 1
+  fi
+done
+(cd "$TMP/src" && bash scripts/build-wasm.sh --install && npm ci --silent && npm run build --silent)
 # write-build-manifest --check recomputes dist/ + firefox/ content hashes in
 # the rebuilt tree (its CWD) and compares them to the manifest we just wrote.
 (cd "$TMP/src" && node "$ROOT/scripts/write-build-manifest.mjs" --check \
