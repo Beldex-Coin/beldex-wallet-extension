@@ -1,0 +1,6 @@
+# The Emscripten build output stays in git for day-to-day development, but it is left out of
+# `git archive`, which is how the AMO source package is made. The source package then holds only
+# human-written code, and `npm run build-for-amo` rebuilds these two files from pinned source with
+# scripts/build-wasm.sh.
+vendor/beldex-app-bridge/BeldexLibAppCpp_WASM.js export-ignore
+vendor/beldex-app-bridge/BeldexLibAppCpp_WASM.wasm export-ignore
