@@ -5,12 +5,21 @@
 - **Publisher:** the Beldex team (https://beldex.io)
 - **Source:** https://github.com/Beldex-Coin/beldex-wallet-extension
 
+## This source package contains no generated code
+
+Every code file here is written by hand. That includes the JavaScript wrappers in
+`vendor/beldex-app-bridge/`. The only other files are `package-lock.json` (from npm), documentation,
+and the icon images. The webpack bundles and the WebAssembly crypto core are **not** included.
+`npm run build-for-amo` builds both from source.
+
 ## Build environment
 
-- Linux x86_64. We tested on Ubuntu.
+- Linux x86_64 (or arm64). We tested on Ubuntu 24.04.
 - Node.js 22 LTS (tested 22.23.2) and npm 10 (tested 10.9.8).
   Node 20 or newer is required: on Node 18 the build fails inside `copy-webpack-plugin`.
-- No other tools, no `.env` file and no environment variables are needed. Every endpoint comes from
+- For the WebAssembly step: `git`, `python3`, `cmake` (tested 3.28.3), `make` and `curl`, plus internet
+  access. The first run downloads about 400 MB of Emscripten SDK into `/tmp/beldex-libapp-wasm`.
+- No `.env` file and no environment variables are needed. Every endpoint comes from
   [`src/lib/networks.json`](src/lib/networks.json).
 
 ## Build
@@ -20,8 +29,15 @@ npm ci
 npm run build-for-amo
 ```
 
-The add-on is written to `firefox/`, with `manifest.json` at its root. Compare that folder file by file
-with the uploaded package.
+`build-for-amo` runs two steps:
+
+1. `scripts/build-wasm.sh --install` compiles the crypto core from pinned public source. It writes
+   `BeldexLibAppCpp_WASM.wasm` and its Emscripten loader `BeldexLibAppCpp_WASM.js` into
+   `vendor/beldex-app-bridge/` (see below).
+2. `webpack --mode=production --env firefox` bundles `src/`.
+
+The add-on is written to `firefox/`, with `manifest.json` at its root. It is byte-identical to the uploaded
+package; our release script runs this same build from this same source package and checks that.
 
 To also run the test suite (optional), run `npm test` after the build. Several tests use the built bundle,
 and `test/bridge.test.mjs` runs the crypto bridge under `--disallow-code-generation-from-strings`,
@@ -40,7 +56,7 @@ which is the same restriction the MV3 CSP enforces.
 | `panel.html`, `approval.html`, `icons/` | [`public/`](public/), copied unchanged |
 | `fonts/*.woff2` | npm packages `@fontsource/michroma` and `@fontsource/space-mono`, copied unchanged |
 | `*.LICENSE.txt` | License headers of the bundled npm libraries, extracted by webpack |
-| `assets/BeldexLibAppCpp_WASM.wasm` | [`vendor/beldex-app-bridge/`](vendor/beldex-app-bridge/), copied unchanged (see below) |
+| `assets/BeldexLibAppCpp_WASM.wasm` | Built from source by `scripts/build-wasm.sh` (step 1 above), then copied unchanged |
 
 The `.js` files are minified webpack output. The source for all of them is in `src/`, and the build uses
 no source maps or eval-based tooling. npm dependencies are pinned in `package-lock.json` and are not modified.
@@ -48,28 +64,28 @@ no source maps or eval-based tooling. npm dependencies are pinned in `package-lo
 ## The crypto core (WebAssembly)
 
 All key handling and transaction signing is done by the Beldex crypto library: C++ from
-https://github.com/Beldex-Coin/beldex-core-cpp, compiled to WebAssembly with Emscripten. The JavaScript
-wrappers come from the package `@bdxi/beldex-app-bridge` 4.0.0 (source:
-https://github.com/Beldex-Coin/beldex-utils). The package is kept in
-[`vendor/beldex-app-bridge/`](vendor/beldex-app-bridge/) and installed through a `file:` dependency.
+https://github.com/Beldex-Coin/beldex-core-cpp, compiled to WebAssembly with Emscripten.
 
-| File | What it is | sha256 |
+The package [`vendor/beldex-app-bridge/`](vendor/beldex-app-bridge/) (`@bdxi/beldex-app-bridge` 4.0.0) is
+installed through a `file:` dependency. Its hand-written JavaScript wrappers (`index.js`, `MyMonero*.js`)
+are copied unchanged from https://github.com/Beldex-Coin/beldex-utils, `packages/beldex-app-bridge/`, at
+commit `1c2d59e66916f8729b5ae579d2764db67f9b4c58` (branch `privacy-token-integration`). The npm registry
+only has older versions of this package (up to 3.0.2), and this add-on does not use them.
+
+The two generated files are not in this source package. Step 1 of the build produces them:
+
+| File | What it is | sha256 after the build |
 |---|---|---|
 | `BeldexLibAppCpp_WASM.wasm` | The compiled crypto core | `538fb9e1f9487002dc16c82b78659a9aee86940dcc4c836f3a7f9a70db55e164` |
-| `BeldexLibAppCpp_WASM.js` | Emscripten-generated loader, not minified, unmodified | `f6fca26cfdff60cbe2b802d2c239e3182da52634f793a49ae210507ea3e15bff` |
-| `index.js`, `MyMonero*.js` | Plain JavaScript wrappers from beldex-utils, unmodified | |
+| `BeldexLibAppCpp_WASM.js` | Emscripten-generated loader, not minified, not edited | `f6fca26cfdff60cbe2b802d2c239e3182da52634f793a49ae210507ea3e15bff` |
 
-### Rebuilding the WASM from source
+The same two files, with the same hashes, are also in beldex-utils at the commit above.
 
-[`scripts/build-wasm.sh`](scripts/build-wasm.sh) rebuilds both generated files and compares them byte for
-byte with the vendored ones:
+### How the WASM is built
 
-```bash
-scripts/build-wasm.sh
-```
-
-It prints `MATCH` on success. It needs `git`, `python3`, `cmake` (tested 3.28.3), `make` and `curl`. It
-runs on Linux x86_64 or arm64, and the first run downloads about 400 MB of Emscripten SDK.
+[`scripts/build-wasm.sh`](scripts/build-wasm.sh) does the whole job. `build-for-amo` runs it with
+`--install`. Run without arguments, it compares its output with files already in `vendor/` and prints
+`MATCH`.
 
 **Pinned inputs.** The script fetches each source at a fixed commit over public HTTPS. It also checks every
 commit against the gitlink its parent repository records.
@@ -105,12 +121,12 @@ These are the only hosts it contacts, which are also the only entries in `host_p
 
 | Host | Purpose | Data sent |
 |---|---|---|
-| `lwsapi.rpcnode.stream`, `lwstestapi.rpcnode.stream` | Beldex light-wallet server (mainnet and testnet). `rpcnode.stream` is Beldex's domain for its public nodes. | Wallet address and private **view** key (read-only: it can see incoming payments but cannot spend); signed transactions to broadcast |
+| `lwsapi.rpcnode.stream`, `lwstestapi.rpcnode.stream` | Beldex light-wallet server (mainnet and testnet). `rpcnode.stream` is the domain Beldex owns and uses for its public nodes. | Wallet address and private **view** key (read-only: it can see incoming payments but cannot spend), which also serve as the account login (`/login`); signed transactions to broadcast |
 | `explorer.beldex.io`, `testnet.beldex.dev` | Beldex Name Service (BNS) lookup | The name the user typed |
 | `api.coingecko.com` | BDX price | Nothing user-specific |
 
 Because of the LWS row, the manifest declares `data_collection_permissions.required:
-["financialAndPaymentInfo"]`, and Firefox asks the user to consent when they install. `strict_min_version`
+["financialAndPaymentInfo", "authenticationInfo"]`, and Firefox asks the user to consent when they install. `strict_min_version`
 is 140.0, the first version with this built-in consent, so there is no older Firefox that installs the
 add-on without asking.
 
