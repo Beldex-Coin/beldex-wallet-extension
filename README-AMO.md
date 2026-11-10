@@ -1,6 +1,6 @@
 # Beldex Wallet: build notes for AMO reviewers
 
-- **Add-on:** Beldex Wallet 1.0.4
+- **Add-on:** Beldex Wallet 1.0.5
 - **Add-on ID:** `beldex-wallet@beldex.io`
 - **Publisher:** the Beldex team (https://beldex.io)
 - **Source:** https://github.com/Beldex-Coin/beldex-wallet-extension
@@ -108,6 +108,15 @@ These are the only hosts it contacts, which are also the only entries in `host_p
 | `lwsapi.rpcnode.stream`, `lwstestapi.rpcnode.stream` | Beldex light-wallet server (mainnet and testnet). `rpcnode.stream` is Beldex's domain for its public nodes. | Wallet address and private **view** key (read-only: it can see incoming payments but cannot spend); signed transactions to broadcast |
 | `explorer.beldex.io`, `testnet.beldex.dev` | Beldex Name Service (BNS) lookup | The name the user typed |
 | `api.coingecko.com` | BDX price | Nothing user-specific |
+
+Because of the LWS row, the manifest declares `data_collection_permissions.required:
+["financialAndPaymentInfo"]`, and Firefox asks the user to consent when they install. `strict_min_version`
+is 140.0, the first version with this built-in consent, so there is no older Firefox that installs the
+add-on without asking.
+
+`src/lib/networks.json` also contains a `daemonRpc` URL for each network (testnet:
+`http://209.126.86.93:29091/json_rpc`). It is kept for future use, nothing reads it, and it is not in
+`host_permissions`, so the add-on never contacts it.
 
 ## Permissions
 
