@@ -276,12 +276,15 @@ Settings and in a bottom site bar.
 3. **Subaddresses** aren't supported by the MyMonero-lineage core + LWS combination; funds sent
    to one would be invisible. Integrated addresses are the deliberate substitute. Proper support
    needs LWS-side subaddress registration (à la monero-lws) first.
-4. **Firefox baseline is 128** (`strict_min_version` in `manifest.firefox.json`). MAIN-world
-   content scripts — how the provider is injected before page scripts run — need Firefox 128+;
-   on older versions the provider would land in the isolated world and dapps wouldn't see
-   `window.beldex`. (`storage.session` also needs 115+; 128 covers both.)
-5. **AMO data-collection declaration** is `["none"]` — defensible (the view key goes to the
-   app's own backend), but confirm against Mozilla policy before publishing.
+4. **Firefox baseline is 140** (`strict_min_version` in `manifest.firefox.json`). MAIN-world
+   content scripts, which inject the provider before page scripts run, need Firefox 128+. On
+   older versions the provider would land in the isolated world, and dapps wouldn't see
+   `window.beldex`. 140 is the first version with Firefox's built-in data-collection consent.
+   Supporting anything older would mean building our own consent screen.
+5. **AMO data-collection declaration** is `required: ["financialAndPaymentInfo"]`. While the
+   wallet is unlocked, it sends the address and private view key to the LWS every 30 seconds,
+   and it broadcasts signed transactions through the LWS. Mozilla counts any data handled outside
+   the browser, so `"none"` would be wrong. Firefox asks the user to consent at install time.
 6. **Verify before mainnet ship.** Send end-to-end on testnet after any core/bridge bump —
    CLSAG since HF15, Bulletproofs+ since HF20.
 
